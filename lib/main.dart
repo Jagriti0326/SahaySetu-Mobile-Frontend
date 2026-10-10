@@ -34,7 +34,28 @@ class SahaySetuApp extends StatelessWidget {
   );
 }
 
-enum AppRole { citizen, worker, authority }
+enum AppRole { citizen, worker }
+
+// Demo-only accounts: these disappear when the app process is reset.
+class DemoCitizenAccount {
+  DemoCitizenAccount({
+    required this.name,
+    required this.email,
+    required this.phone,
+    required this.password,
+  });
+  final String name;
+  final String email;
+  final String phone;
+  final String password;
+}
+
+final Map<String, DemoCitizenAccount> demoCitizenAccounts = {};
+// Demo worker roster. Real worker accounts must come from the backend.
+const Map<String, String> demoWorkerAccounts = {
+  'rahul@sahaysetu': 'rahul1234',
+  'amit@sahaysetu': 'amit1234',
+};
 
 class CivicComplaint {
   CivicComplaint({
@@ -45,6 +66,7 @@ class CivicComplaint {
     required this.priority,
     required this.createdAt,
     this.photoPath,
+    this.ownerEmail,
     this.latitude,
     this.longitude,
     this.department = 'Unassigned',
@@ -60,6 +82,7 @@ class CivicComplaint {
   final String priority;
   final DateTime createdAt;
   final String? photoPath;
+  final String? ownerEmail;
   final double? latitude;
   final double? longitude;
   String department;
@@ -73,6 +96,7 @@ class CivicComplaint {
 }
 
 class SahaySetuState extends ChangeNotifier {
+  String? currentCitizenEmail;
   int _nextId = 1026;
   final List<CivicComplaint> complaints = [
     CivicComplaint(
@@ -107,6 +131,7 @@ class SahaySetuState extends ChangeNotifier {
     required String description,
     required String priority,
     String? photoPath,
+    String? ownerEmail,
     double? latitude,
     double? longitude,
   }) {
@@ -118,6 +143,7 @@ class SahaySetuState extends ChangeNotifier {
       priority: priority,
       createdAt: DateTime.now(),
       photoPath: photoPath,
+      ownerEmail: ownerEmail,
       latitude: latitude,
       longitude: longitude,
     );
@@ -166,42 +192,75 @@ class RoleLoginScreen extends StatefulWidget {
 class _RoleLoginScreenState extends State<RoleLoginScreen> {
   AppRole role = AppRole.citizen;
   final formKey = GlobalKey<FormState>();
-  final usernameController = TextEditingController();
+  final emailController = TextEditingController();
   final passwordController = TextEditingController();
+  final confirmPasswordController = TextEditingController();
   bool obscurePassword = true;
+  bool signingUp = false;
 
   @override
   void dispose() {
-    usernameController.dispose();
+    emailController.dispose();
     passwordController.dispose();
+    confirmPasswordController.dispose();
     super.dispose();
   }
 
   String? validatePassword(String? value) {
     final password = value ?? '';
     if (password.isEmpty) return 'Please enter your password';
-    if (password.length < 8) return 'Password must be at least 8 characters';
-    if (!RegExp(r'[A-Za-z]').hasMatch(password))
-      return 'Include at least one letter';
-    if (!RegExp(r'\d').hasMatch(password)) return 'Include at least one number';
-    if (!RegExp(r'[^A-Za-z0-9]').hasMatch(password))
-      return 'Include at least one symbol (e.g. @ or #)';
+    if (password.length < 8) return 'Use at least 8 characters';
+    if (!RegExp(r'[A-Za-z]').hasMatch(password)) return 'Include a letter';
+    if (!RegExp(r'\d').hasMatch(password)) return 'Include a number';
+    if (!RegExp(r'[^A-Za-z0-9]').hasMatch(password)) {
+      return 'Include a symbol (e.g. @ or #)';
+    }
     return null;
   }
+
+  void showError(String text) => message(context, text);
 
   void login() {
     FocusScope.of(context).unfocus();
     if (!(formKey.currentState?.validate() ?? false)) return;
-    final name = usernameController.text.trim();
+    final email = emailController.text.trim().toLowerCase();
+    final password = passwordController.text;
+    if (role == AppRole.citizen) {
+      final account = demoCitizenAccounts[email];
+      if (account == null || account.password != password) {
+        showError(
+          'Account not found or password is incorrect. Please sign up first.',
+        );
+        return;
+      }
+      appState.currentCitizenEmail = account.email;
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (_) => CitizenHome(
+            name: account.name,
+            email: account.email,
+            phone: account.phone,
+          ),
+        ),
+      );
+      return;
+    }
+    // Demo credentials only. Replace with backend-issued worker credentials later.
+    final workerName = email.split('@').first;
+    if (!demoWorkerAccounts.containsKey(email) ||
+        demoWorkerAccounts[email] != password) {
+      showError(
+        'Invalid worker username or password. Try rahul@sahaysetu / rahul1234 or amit@sahaysetu / amit1234.',
+      );
+      return;
+    }
+    final displayName = workerName.isEmpty
+        ? 'Field Worker'
+        : '${workerName[0].toUpperCase()}${workerName.substring(1)}';
     Navigator.pushReplacement(
       context,
-      MaterialPageRoute(
-        builder: (_) => role == AppRole.citizen
-            ? CitizenHome(name: name)
-            : role == AppRole.worker
-            ? WorkerHome(name: name)
-            : AuthorityHome(name: name),
-      ),
+      MaterialPageRoute(builder: (_) => WorkerHome(name: displayName)),
     );
   }
 
@@ -237,7 +296,7 @@ class _RoleLoginScreenState extends State<RoleLoginScreen> {
                   ),
                   const SizedBox(height: 30),
                   const Text(
-                    'Choose demo role',
+                    'Continue as',
                     style: TextStyle(fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(height: 10),
@@ -253,38 +312,73 @@ class _RoleLoginScreenState extends State<RoleLoginScreen> {
                         label: Text('Worker'),
                         icon: Icon(Icons.engineering_outlined),
                       ),
-                      ButtonSegment(
-                        value: AppRole.authority,
-                        label: Text('Authority'),
-                        icon: Icon(Icons.account_balance_outlined),
-                      ),
                     ],
                     selected: {role},
-                    onSelectionChanged: (s) => setState(() => role = s.first),
+                    onSelectionChanged: (s) => setState(() {
+                      role = s.first;
+                      signingUp = false;
+                      formKey.currentState?.reset();
+                      passwordController.clear();
+                      confirmPasswordController.clear();
+                      emailController.clear();
+                    }),
                   ),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 18),
+                  Text(
+                    role == AppRole.citizen
+                        ? (signingUp
+                              ? 'Create citizen account'
+                              : 'Citizen sign in')
+                        : 'Worker sign in',
+                    style: const TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 14),
                   TextFormField(
-                    controller: usernameController,
+                    controller: emailController,
+                    keyboardType: TextInputType.emailAddress,
                     textInputAction: TextInputAction.next,
                     decoration: const InputDecoration(
-                      labelText: 'Username',
-                      prefixIcon: Icon(Icons.person_outline),
+                      labelText: 'Email address',
+                      prefixIcon: Icon(Icons.email_outlined),
                     ),
-                    validator: (value) => value == null || value.trim().isEmpty
-                        ? 'Please enter your username'
-                        : null,
+                    validator: (value) {
+                      final v = value?.trim().toLowerCase() ?? '';
+                      if (v.isEmpty) {
+                        return role == AppRole.worker
+                            ? 'Please enter your username'
+                            : 'Please enter your email';
+                      }
+                      if (role == AppRole.worker) {
+                        if (!RegExp(r'^[a-z]+@sahaysetu$').hasMatch(v)) {
+                          return 'Use workerfirstname@sahaysetu';
+                        }
+                        return null;
+                      }
+                      if (!v.contains('@') || !v.contains('.')) {
+                        return 'Enter a valid email';
+                      }
+                      return null;
+                    },
                   ),
                   const SizedBox(height: 14),
                   TextFormField(
                     controller: passwordController,
                     obscureText: obscurePassword,
-                    textInputAction: TextInputAction.done,
-                    onFieldSubmitted: (_) => login(),
+                    textInputAction: signingUp
+                        ? TextInputAction.next
+                        : TextInputAction.done,
+                    onFieldSubmitted: (_) {
+                      if (!signingUp) login();
+                    },
                     decoration: InputDecoration(
                       labelText: 'Password',
                       prefixIcon: const Icon(Icons.lock_outline),
-                      helperText:
-                          'At least 8 characters with a letter, number and symbol',
+                      helperText: signingUp
+                          ? 'Use at least 8 characters'
+                          : null,
                       suffixIcon: IconButton(
                         icon: Icon(
                           obscurePassword
@@ -295,17 +389,72 @@ class _RoleLoginScreenState extends State<RoleLoginScreen> {
                             setState(() => obscurePassword = !obscurePassword),
                       ),
                     ),
-                    validator: validatePassword,
+                    validator: (value) {
+                      if (role == AppRole.worker) {
+                        return (value ?? '').isEmpty
+                            ? 'Please enter your password'
+                            : null;
+                      }
+                      return validatePassword(value);
+                    },
                   ),
+                  if (role == AppRole.citizen && signingUp) ...[
+                    const SizedBox(height: 14),
+                    TextFormField(
+                      controller: confirmPasswordController,
+                      obscureText: obscurePassword,
+                      textInputAction: TextInputAction.next,
+                      decoration: const InputDecoration(
+                        labelText: 'Confirm password',
+                        prefixIcon: Icon(Icons.lock_reset_outlined),
+                      ),
+                      validator: (value) {
+                        if ((value ?? '').isEmpty) {
+                          return 'Please confirm your password';
+                        }
+                        if (value != passwordController.text) {
+                          return 'Passwords do not match';
+                        }
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 14),
+                    _SignupExtraFields(
+                      onValuesChanged: (name, phone) {
+                        _signupName = name;
+                        _signupPhone = phone;
+                      },
+                    ),
+                  ],
                   const SizedBox(height: 20),
                   FilledButton(
-                    onPressed: login,
-                    child: const Padding(
-                      padding: EdgeInsets.all(14),
-                      child: Text('Login'),
+                    onPressed: signingUp ? _createAccount : login,
+                    child: Padding(
+                      padding: const EdgeInsets.all(14),
+                      child: Text(signingUp ? 'Create Account' : 'Sign In'),
                     ),
                   ),
-                  const SizedBox(height: 12),
+                  if (role == AppRole.citizen)
+                    TextButton(
+                      onPressed: () => setState(() {
+                        signingUp = !signingUp;
+                        formKey.currentState?.reset();
+                        confirmPasswordController.clear();
+                      }),
+                      child: Text(
+                        signingUp
+                            ? 'Already have an account? Sign in'
+                            : 'New citizen? Create an account',
+                      ),
+                    ),
+                  if (role == AppRole.worker)
+                    const Padding(
+                      padding: EdgeInsets.all(12),
+                      child: Text(
+                        'Worker accounts are created by the organisation, not through this app.\nUsername format: workerfirstname@sahaysetu\nPassword format: workerfirstname1234\n\nDemo users: rahul@sahaysetu / rahul1234  •  amit@sahaysetu / amit1234',
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -313,6 +462,99 @@ class _RoleLoginScreenState extends State<RoleLoginScreen> {
         ),
       ),
     ),
+  );
+
+  String _signupName = '';
+  String _signupPhone = '';
+
+  void _createAccount() {
+    FocusScope.of(context).unfocus();
+    if (!(formKey.currentState?.validate() ?? false)) return;
+    final email = emailController.text.trim().toLowerCase();
+    if (_signupName.trim().isEmpty) {
+      showError('Please enter your full name.');
+      return;
+    }
+    if (_signupPhone.trim().length < 10) {
+      showError('Please enter a valid phone number.');
+      return;
+    }
+    if (demoCitizenAccounts.containsKey(email)) {
+      showError('An account with this email already exists.');
+      return;
+    }
+    if (confirmPasswordController.text != passwordController.text) {
+      showError('Passwords do not match.');
+      return;
+    }
+    demoCitizenAccounts[email] = DemoCitizenAccount(
+      name: _signupName.trim(),
+      email: email,
+      phone: _signupPhone.trim(),
+      password: passwordController.text,
+    );
+    appState.currentCitizenEmail = email;
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(
+        builder: (_) => CitizenHome(
+          name: _signupName.trim(),
+          email: email,
+          phone: _signupPhone.trim(),
+        ),
+      ),
+    );
+  }
+}
+
+class _SignupExtraFields extends StatefulWidget {
+  const _SignupExtraFields({required this.onValuesChanged});
+  final void Function(String name, String phone) onValuesChanged;
+  @override
+  State<_SignupExtraFields> createState() => _SignupExtraFieldsState();
+}
+
+class _SignupExtraFieldsState extends State<_SignupExtraFields> {
+  final nameController = TextEditingController();
+  final phoneController = TextEditingController();
+  @override
+  void dispose() {
+    nameController.dispose();
+    phoneController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => Column(
+    children: [
+      TextFormField(
+        controller: nameController,
+        textCapitalization: TextCapitalization.words,
+        decoration: const InputDecoration(
+          labelText: 'Full name',
+          prefixIcon: Icon(Icons.badge_outlined),
+        ),
+        validator: (v) => v == null || v.trim().isEmpty
+            ? 'Please enter your full name'
+            : null,
+        onChanged: (_) =>
+            widget.onValuesChanged(nameController.text, phoneController.text),
+      ),
+      const SizedBox(height: 14),
+      TextFormField(
+        controller: phoneController,
+        keyboardType: TextInputType.phone,
+        decoration: const InputDecoration(
+          labelText: 'Phone number',
+          prefixIcon: Icon(Icons.phone_outlined),
+        ),
+        validator: (v) => v == null || v.trim().length < 10
+            ? 'Enter at least 10 digits'
+            : null,
+        onChanged: (_) =>
+            widget.onValuesChanged(nameController.text, phoneController.text),
+      ),
+    ],
   );
 }
 
@@ -322,24 +564,106 @@ class BaseHome extends StatelessWidget {
     required this.title,
     required this.name,
     required this.buildChildren,
+    this.email = '',
+    this.phone = '',
+    this.isCitizen = false,
   });
-  final String title, name;
+  final String title, name, email, phone;
+  final bool isCitizen;
   final List<Widget> Function() buildChildren;
+
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(
-      title: Text(title),
-      actions: [
-        IconButton(
-          tooltip: 'Switch role / logout',
-          onPressed: () => Navigator.pushAndRemoveUntil(
-            context,
-            MaterialPageRoute(builder: (_) => const RoleLoginScreen()),
-            (_) => false,
-          ),
-          icon: const Icon(Icons.logout),
+    appBar: AppBar(title: Text(title)),
+    drawer: Drawer(
+      child: SafeArea(
+        child: ListView(
+          padding: EdgeInsets.zero,
+          children: [
+            UserAccountsDrawerHeader(
+              accountName: Text(name),
+              accountEmail: Text(
+                email.isEmpty
+                    ? (isCitizen ? 'Citizen account' : 'Demo worker account')
+                    : email,
+              ),
+              currentAccountPicture: const CircleAvatar(
+                child: Icon(Icons.person, size: 32),
+              ),
+            ),
+            ListTile(
+              leading: const Icon(Icons.person_outline),
+              title: const Text('Profile'),
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => ProfileScreen(
+                      name: name,
+                      email: email,
+                      phone: phone,
+                      isCitizen: isCitizen,
+                    ),
+                  ),
+                );
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.settings_outlined),
+              title: const Text('Settings'),
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const SettingsScreen()),
+                );
+              },
+            ),
+            if (isCitizen) ...[
+              ListTile(
+                leading: const Icon(Icons.history),
+                title: const Text('Previous Complaints / Records'),
+                onTap: () {
+                  Navigator.pop(context);
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => PreviousComplaintsScreen(name: name),
+                    ),
+                  );
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.health_and_safety_outlined),
+                title: const Text('City Health Score'),
+                onTap: () {
+                  Navigator.pop(context);
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const CityHealthScoreScreen(),
+                    ),
+                  );
+                },
+              ),
+            ],
+            const Divider(),
+            ListTile(
+              leading: const Icon(Icons.logout),
+              title: const Text('Logout'),
+              onTap: () {
+                appState.currentCitizenEmail = null;
+                Navigator.pushAndRemoveUntil(
+                  context,
+                  MaterialPageRoute(builder: (_) => const RoleLoginScreen()),
+                  (_) => false,
+                );
+              },
+            ),
+          ],
         ),
-      ],
+      ),
     ),
     body: AnimatedBuilder(
       animation: appState,
@@ -353,6 +677,161 @@ class BaseHome extends StatelessWidget {
           const SizedBox(height: 5),
           ...buildChildren(),
         ],
+      ),
+    ),
+  );
+}
+
+class ProfileScreen extends StatelessWidget {
+  const ProfileScreen({
+    super.key,
+    required this.name,
+    required this.email,
+    required this.phone,
+    required this.isCitizen,
+  });
+  final String name, email, phone;
+  final bool isCitizen;
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(title: const Text('Profile')),
+    body: ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        const CircleAvatar(radius: 42, child: Icon(Icons.person, size: 42)),
+        const SizedBox(height: 18),
+        infoTile(Icons.badge_outlined, 'Name', name),
+        infoTile(
+          Icons.email_outlined,
+          'Email',
+          email.isEmpty ? 'Demo worker account' : email,
+        ),
+        if (isCitizen)
+          infoTile(
+            Icons.phone_outlined,
+            'Phone',
+            phone.isEmpty ? 'Not provided' : phone,
+          ),
+      ],
+    ),
+  );
+}
+
+class SettingsScreen extends StatefulWidget {
+  const SettingsScreen({super.key});
+  @override
+  State<SettingsScreen> createState() => _SettingsScreenState();
+}
+
+class _SettingsScreenState extends State<SettingsScreen> {
+  bool notifications = true;
+  bool locationReminder = true;
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(title: const Text('Settings')),
+    body: ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        SwitchListTile(
+          title: const Text('Complaint notifications'),
+          subtitle: const Text('Demo preference only'),
+          value: notifications,
+          onChanged: (v) => setState(() => notifications = v),
+        ),
+        SwitchListTile(
+          title: const Text('Location reminder'),
+          subtitle: const Text('Remind me to capture GPS while reporting'),
+          value: locationReminder,
+          onChanged: (v) => setState(() => locationReminder = v),
+        ),
+      ],
+    ),
+  );
+}
+
+class PreviousComplaintsScreen extends StatelessWidget {
+  const PreviousComplaintsScreen({super.key, required this.name});
+  final String name;
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Previous Complaints')),
+      body: AnimatedBuilder(
+        animation: appState,
+        builder: (context, _) {
+          final mine = appState.complaints
+              .where((c) => c.ownerEmail == appState.currentCitizenEmail)
+              .toList();
+          if (mine.isEmpty) {
+            return const Center(
+              child: Text(
+                'No complaints yet. Report your first civic issue to see it here.',
+              ),
+            );
+          }
+          return ListView(
+            padding: const EdgeInsets.all(16),
+            children: mine
+                .map(
+                  (c) => ComplaintTile(
+                    complaint: c,
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => CitizenComplaintDetails(complaint: c),
+                      ),
+                    ),
+                  ),
+                )
+                .toList(),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class CityHealthScoreScreen extends StatelessWidget {
+  const CityHealthScoreScreen({super.key});
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(title: const Text('City Health Score')),
+    body: AnimatedBuilder(
+      animation: appState,
+      builder: (context, _) => Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                width: 150,
+                height: 150,
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    CircularProgressIndicator(
+                      value: appState.healthScore / 100,
+                      strokeWidth: 12,
+                    ),
+                    Text(
+                      '${appState.healthScore}/100',
+                      style: const TextStyle(
+                        fontSize: 24,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 20),
+              const SizedBox(height: 10),
+              Text(
+                '${appState.resolvedCount} resolved/closed out of ${appState.complaints.length} total complaints',
+              ),
+            ],
+          ),
+        ),
       ),
     ),
   );
@@ -392,12 +871,20 @@ Widget statusChip(String status) {
 }
 
 class CitizenHome extends StatelessWidget {
-  const CitizenHome({super.key, required this.name});
-  final String name;
+  const CitizenHome({
+    super.key,
+    required this.name,
+    this.email = '',
+    this.phone = '',
+  });
+  final String name, email, phone;
   @override
   Widget build(BuildContext context) => BaseHome(
     title: 'Citizen Dashboard',
     name: name,
+    email: email,
+    phone: phone,
+    isCitizen: true,
     buildChildren: () => [
       Card(
         child: Padding(
@@ -437,9 +924,6 @@ class CitizenHome extends StatelessWidget {
                       ),
                     ),
                     SizedBox(height: 5),
-                    Text(
-                      'Demo score based on closed complaints in this session.',
-                    ),
                   ],
                 ),
               ),
@@ -483,17 +967,28 @@ class CitizenHome extends StatelessWidget {
         'My complaints',
         style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
       ),
-      ...appState.complaints.map(
-        (c) => ComplaintTile(
-          complaint: c,
-          onTap: () => Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (_) => CitizenComplaintDetails(complaint: c),
+      ...appState.complaints
+          .where((c) => c.ownerEmail == email)
+          .map(
+            (c) => ComplaintTile(
+              complaint: c,
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => CitizenComplaintDetails(complaint: c),
+                ),
+              ),
+            ),
+          ),
+      if (appState.complaints.where((c) => c.ownerEmail == email).isEmpty)
+        const Padding(
+          padding: EdgeInsets.symmetric(vertical: 24),
+          child: Center(
+            child: Text(
+              'No complaints yet. Tap “Report Civic Issue” to get started.',
             ),
           ),
         ),
-      ),
     ],
   );
 }
@@ -528,15 +1023,20 @@ class _ReportIssueScreenState extends State<ReportIssueScreen> {
   Future<void> captureGps() async {
     setState(() => gettingLocation = true);
     try {
-      if (!await Geolocator.isLocationServiceEnabled()) {
+      final enabled = await Geolocator.isLocationServiceEnabled();
+      if (!mounted) return;
+      if (!enabled) {
         message(context, 'Please turn on device location.');
         return;
       }
-      var p = await Geolocator.checkPermission();
-      if (p == LocationPermission.denied)
-        p = await Geolocator.requestPermission();
-      if (p == LocationPermission.denied ||
-          p == LocationPermission.deniedForever) {
+      var permission = await Geolocator.checkPermission();
+      if (!mounted) return;
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (!mounted) return;
+      }
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
         message(context, 'Location permission not granted.');
         return;
       }
@@ -546,7 +1046,8 @@ class _ReportIssueScreenState extends State<ReportIssueScreen> {
           timeLimit: Duration(seconds: 20),
         ),
       );
-      if (mounted) setState(() => position = value);
+      if (!mounted) return;
+      setState(() => position = value);
     } catch (e) {
       if (mounted) message(context, 'GPS error: $e');
     } finally {
@@ -675,6 +1176,7 @@ class _ReportIssueScreenState extends State<ReportIssueScreen> {
                       description: description.text.trim(),
                       priority: priority,
                       photoPath: photo!.path,
+                      ownerEmail: appState.currentCitizenEmail,
                       latitude: position!.latitude,
                       longitude: position!.longitude,
                     );
@@ -692,12 +1194,6 @@ class _ReportIssueScreenState extends State<ReportIssueScreen> {
               padding: const EdgeInsets.all(14),
               child: Text(saving ? 'Submitting…' : 'Submit Complaint'),
             ),
-          ),
-          const SizedBox(height: 8),
-          const Text(
-            'Note: this currently saves to shared app memory for the demo, not to a remote database.',
-            textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 12, color: Colors.black54),
           ),
         ],
       ),
@@ -904,146 +1400,9 @@ class _WorkerTaskScreenState extends State<WorkerTaskScreen> {
               child: Text('Save Work Update'),
             ),
           ),
-          const SizedBox(height: 8),
-          const Text(
-            'Status is shared inside this running demo session. Remote API sync is not configured here.',
-            style: TextStyle(fontSize: 12, color: Colors.black54),
-          ),
         ],
       ),
     );
-  }
-}
-
-class AuthorityHome extends StatelessWidget {
-  const AuthorityHome({super.key, required this.name});
-  final String name;
-  @override
-  Widget build(BuildContext context) => BaseHome(
-    title: 'Municipal Authority',
-    name: name,
-    buildChildren: () => [
-      Row(
-        children: [
-          Expanded(
-            child: statCard(
-              'Total',
-              '${appState.complaints.length}',
-              Icons.assignment,
-            ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: statCard(
-              'Active',
-              '${appState.activeCount}',
-              Icons.pending_actions,
-            ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: statCard(
-              'Closed',
-              '${appState.complaints.where((c) => c.status == 'Closed').length}',
-              Icons.task_alt,
-            ),
-          ),
-        ],
-      ),
-      Card(
-        child: ListTile(
-          leading: const Icon(Icons.insights),
-          title: const Text('City Health Score'),
-          trailing: Text(
-            '${appState.healthScore}/100',
-            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-          ),
-          subtitle: const Text('Illustrative score from this demo session.'),
-        ),
-      ),
-      const Text(
-        'Complaint queue & assignments',
-        style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-      ),
-      const SizedBox(height: 8),
-      ...appState.complaints.map(
-        (c) => Card(
-          child: ListTile(
-            title: Text(
-              c.title,
-              style: const TextStyle(fontWeight: FontWeight.bold),
-            ),
-            subtitle: Text(
-              '${c.id} • ${c.department}\nWorker: ${c.worker}\nStatus: ${c.status}',
-            ),
-            isThreeLine: true,
-            trailing: const Icon(Icons.edit_note),
-            onTap: () => showAssignmentDialog(context, c),
-          ),
-        ),
-      ),
-    ],
-  );
-}
-
-Future<void> showAssignmentDialog(
-  BuildContext context,
-  CivicComplaint c,
-) async {
-  String department = c.department == 'Unassigned'
-      ? departmentFor(c.category)
-      : c.department;
-  String worker = c.worker == 'Unassigned' ? 'Rahul Sharma' : c.worker;
-  final result = await showDialog<bool>(
-    context: context,
-    builder: (dialogContext) => StatefulBuilder(
-      builder: (context, setState) => AlertDialog(
-        title: Text('Assign ${c.id}'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            DropdownButtonFormField<String>(
-              initialValue: department,
-              decoration: const InputDecoration(labelText: 'Department'),
-              items: const [
-                'Roads',
-                'Electrical',
-                'Sanitation',
-                'Water Supply',
-                'Drainage',
-              ].map((x) => DropdownMenuItem(value: x, child: Text(x))).toList(),
-              onChanged: (x) => setState(() => department = x ?? department),
-            ),
-            const SizedBox(height: 12),
-            DropdownButtonFormField<String>(
-              initialValue: worker,
-              decoration: const InputDecoration(labelText: 'Field worker'),
-              items: const [
-                'Rahul Sharma',
-                'Amit Kumar',
-                'Priya Singh',
-              ].map((x) => DropdownMenuItem(value: x, child: Text(x))).toList(),
-              onChanged: (x) => setState(() => worker = x ?? worker),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(dialogContext, true),
-            child: const Text('Save assignment'),
-          ),
-        ],
-      ),
-    ),
-  );
-  if (result == true) {
-    appState.assign(c, department, worker);
-    if (context.mounted)
-      message(context, 'Assigned to $worker ($department) in demo.');
   }
 }
 
@@ -1204,10 +1563,6 @@ class _CitizenComplaintDetailsState extends State<CitizenComplaintDetails> {
               ),
             ),
           const SizedBox(height: 12),
-          const Text(
-            'Demo data is shared in app memory only. Refresh/restart clears new complaints and changes.',
-            style: TextStyle(fontSize: 12, color: Colors.black54),
-          ),
         ],
       ),
     );
