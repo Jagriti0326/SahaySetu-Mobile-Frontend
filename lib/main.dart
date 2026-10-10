@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:image_picker/image_picker.dart';
 
@@ -66,6 +67,8 @@ class CivicComplaint {
     required this.priority,
     required this.createdAt,
     this.photoPath,
+    this.completionPhotoPath,
+    this.resolutionNote,
     this.ownerEmail,
     this.latitude,
     this.longitude,
@@ -82,6 +85,8 @@ class CivicComplaint {
   final String priority;
   final DateTime createdAt;
   final String? photoPath;
+  String? completionPhotoPath;
+  String? resolutionNote;
   final String? ownerEmail;
   final double? latitude;
   final double? longitude;
@@ -159,8 +164,19 @@ class SahaySetuState extends ChangeNotifier {
     notifyListeners();
   }
 
-  void updateStatus(CivicComplaint c, String status) {
+  void updateStatus(
+    CivicComplaint c,
+    String status, {
+    String? completionPhotoPath,
+    String? resolutionNote,
+  }) {
     c.status = status;
+    if (completionPhotoPath != null) {
+      c.completionPhotoPath = completionPhotoPath;
+    }
+    if (resolutionNote != null) {
+      c.resolutionNote = resolutionNote;
+    }
     notifyListeners();
   }
 
@@ -228,9 +244,7 @@ class _RoleLoginScreenState extends State<RoleLoginScreen> {
     if (role == AppRole.citizen) {
       final account = demoCitizenAccounts[email];
       if (account == null || account.password != password) {
-        showError(
-          'Account not found or password is incorrect. Please sign up first.',
-        );
+        showError('Invalid email or password. Please try again.');
         return;
       }
       appState.currentCitizenEmail = account.email;
@@ -250,9 +264,7 @@ class _RoleLoginScreenState extends State<RoleLoginScreen> {
     final workerName = email.split('@').first;
     if (!demoWorkerAccounts.containsKey(email) ||
         demoWorkerAccounts[email] != password) {
-      showError(
-        'Invalid worker username or password. Try rahul@sahaysetu / rahul1234 or amit@sahaysetu / amit1234.',
-      );
+      showError('Invalid username or password. Please try again.');
       return;
     }
     final displayName = workerName.isEmpty
@@ -451,8 +463,9 @@ class _RoleLoginScreenState extends State<RoleLoginScreen> {
                     const Padding(
                       padding: EdgeInsets.all(12),
                       child: Text(
-                        'Worker accounts are created by the organisation, not through this app.\nUsername format: workerfirstname@sahaysetu\nPassword format: workerfirstname1234\n\nDemo users: rahul@sahaysetu / rahul1234  •  amit@sahaysetu / amit1234',
+                        'Worker accounts are issued and managed by municipal authorities.',
                         textAlign: TextAlign.center,
+                        style: TextStyle(color: Colors.black54),
                       ),
                     ),
                 ],
@@ -1006,17 +1019,64 @@ class _ReportIssueScreenState extends State<ReportIssueScreen> {
   String category = 'Road Damage', priority = 'Medium';
   XFile? photo;
   Position? position;
-  bool gettingLocation = false, saving = false;
+  bool gettingLocation = false, saving = false, capturingPhoto = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _retrieveLostData();
+  }
+
+  Future<void> _retrieveLostData() async {
+    try {
+      final response = await picker.retrieveLostData();
+      if (response.isEmpty) return;
+      if (response.file != null && mounted) {
+        setState(() => photo = response.file);
+        message(context, 'Recovered captured photo.');
+      } else if (response.exception != null && mounted) {
+        message(
+          context,
+          'Camera recovery: ${response.exception?.message ?? response.exception.toString()}',
+        );
+      }
+    } catch (_) {
+      // Platform doesn't support or no lost data
+    }
+  }
+
   Future<void> capturePhoto() async {
+    if (capturingPhoto) return;
+    setState(() => capturingPhoto = true);
     try {
       final x = await picker.pickImage(
         source: ImageSource.camera,
         preferredCameraDevice: CameraDevice.rear,
         imageQuality: 80,
+        maxWidth: 1600,
+        maxHeight: 1600,
       );
-      if (mounted && x != null) setState(() => photo = x);
+      if (!mounted) return;
+      if (x != null) {
+        setState(() => photo = x);
+        message(context, 'Live photo captured successfully.');
+      } else {
+        message(context, 'Camera was closed without taking a photo.');
+      }
+    } on PlatformException catch (e) {
+      if (!mounted) return;
+      if (e.code == 'camera_access_denied') {
+        message(
+          context,
+          'Camera permission denied. Please allow camera in Settings.',
+        );
+      } else {
+        message(context, 'Camera error: ${e.message ?? e.code}');
+      }
     } catch (e) {
       if (mounted) message(context, 'Camera error: $e');
+    } finally {
+      if (mounted) setState(() => capturingPhoto = false);
     }
   }
 
@@ -1078,22 +1138,60 @@ class _ReportIssueScreenState extends State<ReportIssueScreen> {
               title: const Text('Live issue photo'),
               subtitle: Text(
                 photo == null
-                    ? 'Capture a photo using camera'
-                    : 'Photo captured',
+                    ? 'Take live photo at the complaint site'
+                    : 'Live photo captured',
               ),
               trailing: FilledButton.tonal(
-                onPressed: capturePhoto,
-                child: Text(photo == null ? 'Capture' : 'Retake'),
+                onPressed: capturingPhoto ? null : capturePhoto,
+                child: capturingPhoto
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : Text(photo == null ? 'Capture' : 'Retake'),
               ),
             ),
           ),
           if (photo != null)
-            ClipRRect(
-              borderRadius: BorderRadius.circular(12),
-              child: Image.file(
-                File(photo!.path),
-                height: 190,
-                fit: BoxFit.cover,
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Stack(
+                alignment: Alignment.topRight,
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: Image.file(
+                      File(photo!.path),
+                      height: 190,
+                      width: double.infinity,
+                      fit: BoxFit.cover,
+                      errorBuilder: (context, error, stackTrace) => Container(
+                        height: 140,
+                        width: double.infinity,
+                        color: Colors.grey.shade200,
+                        alignment: Alignment.center,
+                        child: const Text('Unable to load photo preview'),
+                      ),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.all(6),
+                    child: CircleAvatar(
+                      backgroundColor: Colors.black54,
+                      radius: 16,
+                      child: IconButton(
+                        icon: const Icon(
+                          Icons.close,
+                          size: 16,
+                          color: Colors.white,
+                        ),
+                        tooltip: 'Remove photo',
+                        onPressed: () => setState(() => photo = null),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
           Card(
@@ -1308,24 +1406,78 @@ class _WorkerTaskScreenState extends State<WorkerTaskScreen> {
   late String status;
   XFile? proof;
   final picker = ImagePicker();
+  late final TextEditingController noteController;
+  bool capturingProof = false;
+
   @override
   void initState() {
     super.initState();
     status = widget.complaint.status == 'Assigned'
         ? 'Pending'
         : widget.complaint.status;
+    noteController = TextEditingController(
+      text: widget.complaint.resolutionNote ?? '',
+    );
+    if (widget.complaint.completionPhotoPath != null) {
+      proof = XFile(widget.complaint.completionPhotoPath!);
+    }
+    _checkLostData();
+  }
+
+  @override
+  void dispose() {
+    noteController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _checkLostData() async {
+    try {
+      final response = await picker.retrieveLostData();
+      if (response.isEmpty) return;
+      if (response.file != null && mounted) {
+        setState(() => proof = response.file);
+        message(context, 'Recovered completion photo.');
+      } else if (response.exception != null && mounted) {
+        message(
+          context,
+          'Camera recovery: ${response.exception?.message ?? response.exception.toString()}',
+        );
+      }
+    } catch (_) {}
   }
 
   Future<void> takeProof() async {
+    if (capturingProof) return;
+    setState(() => capturingProof = true);
     try {
       final x = await picker.pickImage(
         source: ImageSource.camera,
         preferredCameraDevice: CameraDevice.rear,
         imageQuality: 80,
+        maxWidth: 1600,
+        maxHeight: 1600,
       );
-      if (mounted && x != null) setState(() => proof = x);
+      if (!mounted) return;
+      if (x != null) {
+        setState(() => proof = x);
+        message(context, 'Completion photo captured successfully.');
+      } else {
+        message(context, 'Camera was closed without taking a photo.');
+      }
+    } on PlatformException catch (e) {
+      if (!mounted) return;
+      if (e.code == 'camera_access_denied') {
+        message(
+          context,
+          'Camera permission denied. Please allow camera in Settings.',
+        );
+      } else {
+        message(context, 'Camera error: ${e.message ?? e.code}');
+      }
     } catch (e) {
       if (mounted) message(context, 'Camera error: $e');
+    } finally {
+      if (mounted) setState(() => capturingProof = false);
     }
   }
 
@@ -1348,6 +1500,32 @@ class _WorkerTaskScreenState extends State<WorkerTaskScreen> {
           infoTile(Icons.apartment, 'Department', c.department),
           infoTile(Icons.person, 'Assigned worker', c.worker),
           infoTile(Icons.priority_high, 'Priority', c.priority),
+          if (c.photoPath != null) ...[
+            const SizedBox(height: 8),
+            const Text(
+              'Citizen Issue Photo:',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 6),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: Image.file(
+                File(c.photoPath!),
+                height: 170,
+                width: double.infinity,
+                fit: BoxFit.cover,
+                errorBuilder: (_, _, _) => Container(
+                  height: 110,
+                  width: double.infinity,
+                  color: Colors.grey.shade200,
+                  alignment: Alignment.center,
+                  child: const Text(
+                    'Original photo unavailable on this device',
+                  ),
+                ),
+              ),
+            ),
+          ],
           const SizedBox(height: 12),
           DropdownButtonFormField<String>(
             initialValue:
@@ -1363,22 +1541,71 @@ class _WorkerTaskScreenState extends State<WorkerTaskScreen> {
             onChanged: (x) => setState(() => status = x ?? status),
           ),
           const SizedBox(height: 12),
+          TextFormField(
+            controller: noteController,
+            maxLines: 2,
+            decoration: const InputDecoration(
+              labelText: 'Resolution note (optional)',
+              hintText: 'Describe actions taken to fix the issue',
+            ),
+          ),
+          const SizedBox(height: 12),
           OutlinedButton.icon(
-            onPressed: takeProof,
-            icon: Icon(proof == null ? Icons.camera_alt : Icons.check_circle),
+            onPressed: capturingProof ? null : takeProof,
+            icon: capturingProof
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : Icon(proof == null ? Icons.camera_alt : Icons.check_circle),
             label: Text(
-              proof == null
+              capturingProof
+                  ? 'Opening camera…'
+                  : proof == null
                   ? 'Capture completion photo'
-                  : 'Completion photo captured',
+                  : 'Retake completion photo',
             ),
           ),
           if (proof != null)
-            ClipRRect(
-              borderRadius: BorderRadius.circular(12),
-              child: Image.file(
-                File(proof!.path),
-                height: 180,
-                fit: BoxFit.cover,
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Stack(
+                alignment: Alignment.topRight,
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: Image.file(
+                      File(proof!.path),
+                      height: 180,
+                      width: double.infinity,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, _, _) => Container(
+                        height: 130,
+                        width: double.infinity,
+                        color: Colors.grey.shade200,
+                        alignment: Alignment.center,
+                        child: const Text('Unable to display completion photo'),
+                      ),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.all(6),
+                    child: CircleAvatar(
+                      backgroundColor: Colors.black54,
+                      radius: 16,
+                      child: IconButton(
+                        icon: const Icon(
+                          Icons.close,
+                          size: 16,
+                          color: Colors.white,
+                        ),
+                        tooltip: 'Remove photo',
+                        onPressed: () => setState(() => proof = null),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
           const SizedBox(height: 12),
@@ -1391,7 +1618,12 @@ class _WorkerTaskScreenState extends State<WorkerTaskScreen> {
                 );
                 return;
               }
-              appState.updateStatus(c, status);
+              appState.updateStatus(
+                c,
+                status,
+                completionPhotoPath: proof?.path,
+                resolutionNote: noteController.text.trim(),
+              );
               message(context, 'Work status updated to $status in demo.');
               Navigator.pop(context);
             },
@@ -1499,6 +1731,50 @@ class _CitizenComplaintDetailsState extends State<CitizenComplaintDetails> {
           infoTile(Icons.apartment, 'Department', c.department),
           infoTile(Icons.person, 'Assigned worker', c.worker),
           infoTile(Icons.priority_high, 'Priority', c.priority),
+          if (c.photoPath != null) ...[
+            const SizedBox(height: 8),
+            const Text(
+              'Reported Issue Photo:',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 6),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: Image.file(
+                File(c.photoPath!),
+                height: 170,
+                width: double.infinity,
+                fit: BoxFit.cover,
+                errorBuilder: (_, _, _) => const SizedBox.shrink(),
+              ),
+            ),
+          ],
+          if (c.completionPhotoPath != null) ...[
+            const SizedBox(height: 12),
+            const Text(
+              'Worker Completion Evidence:',
+              style: TextStyle(fontWeight: FontWeight.bold, color: Colors.teal),
+            ),
+            const SizedBox(height: 6),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: Image.file(
+                File(c.completionPhotoPath!),
+                height: 170,
+                width: double.infinity,
+                fit: BoxFit.cover,
+                errorBuilder: (_, _, _) => const SizedBox.shrink(),
+              ),
+            ),
+            if (c.resolutionNote != null && c.resolutionNote!.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(
+                  'Worker note: ${c.resolutionNote}',
+                  style: const TextStyle(fontStyle: FontStyle.italic),
+                ),
+              ),
+          ],
           const SizedBox(height: 8),
           const Text(
             'Complaint progress',
