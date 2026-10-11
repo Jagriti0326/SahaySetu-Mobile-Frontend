@@ -2054,7 +2054,7 @@ class WorkerLoginScreen extends StatefulWidget {
 
 class _WorkerLoginScreenState extends State<WorkerLoginScreen> {
   final _formKey = GlobalKey<FormState>();
-  final bool _obscureWorkerPass = true;
+  bool _obscureWorkerPass = true;
   final TextEditingController _usernameController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
 
