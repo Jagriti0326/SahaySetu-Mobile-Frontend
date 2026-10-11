@@ -1,1846 +1,2657 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:geolocator/geolocator.dart';
 import 'package:image_picker/image_picker.dart';
+import 'dart:io';
 
-void main() => runApp(const SahaySetuApp());
-
-final appState = SahaySetuState();
-
-class SahaySetuApp extends StatelessWidget {
-  const SahaySetuApp({super.key});
-  @override
-  Widget build(BuildContext context) => MaterialApp(
-    title: 'SahaySetu',
-    debugShowCheckedModeBanner: false,
-    theme: ThemeData(
-      useMaterial3: true,
-      colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF176B87)),
-      scaffoldBackgroundColor: const Color(0xFFF5F8FA),
-      cardTheme: const CardThemeData(
-        elevation: 0,
-        margin: EdgeInsets.only(bottom: 12),
-      ),
-      inputDecorationTheme: InputDecorationTheme(
-        filled: true,
-        fillColor: Colors.white,
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
-          borderSide: BorderSide.none,
-        ),
-      ),
-    ),
-    home: const RoleLoginScreen(),
-  );
+void main() {
+  runApp(const SahaySetuApp());
 }
 
-enum AppRole { citizen, worker }
+// ==========================================
+// APP THEME CONTROLLER & NOTIFIER
+// ==========================================
+class AppThemeNotifier extends ChangeNotifier {
+  bool isDarkMode = false;
+  Color primaryColor = const Color(0xFF2563EB);
 
-// Demo-only accounts: these disappear when the app process is reset.
-class DemoCitizenAccount {
-  DemoCitizenAccount({
-    required this.name,
-    required this.email,
-    required this.phone,
-    required this.password,
-  });
-  final String name;
+  void toggleTheme(bool dark) {
+    isDarkMode = dark;
+    notifyListeners();
+  }
+
+  void setPrimaryColor(Color color) {
+    primaryColor = color;
+    notifyListeners();
+  }
+}
+
+final AppThemeNotifier appTheme = AppThemeNotifier();
+
+// ==========================================
+// DATA MODELS & DATABASES
+// ==========================================
+class UserProfile {
+  final String fullName;
   final String email;
-  final String phone;
   final String password;
+  final String mobile;
+  String? profileImagePath;
+
+  UserProfile({
+    required this.fullName,
+    required this.email,
+    required this.password,
+    required this.mobile,
+    this.profileImagePath,
+  });
 }
 
-final Map<String, DemoCitizenAccount> demoCitizenAccounts = {};
-// Demo worker roster. Real worker accounts must come from the backend.
-const Map<String, String> demoWorkerAccounts = {
-  'rahul@sahaysetu': 'rahul1234',
-  'amit@sahaysetu': 'amit1234',
-};
+class WorkerProfile {
+  final String workerId;
+  final String fullName;
+  final String department;
+  final String wardZone;
+  final String officialEmail;
+  final String mobile;
+  final String designation;
+  int bonusPoints;
 
-class CivicComplaint {
-  CivicComplaint({
-    required this.id,
-    required this.category,
-    required this.title,
-    required this.description,
-    required this.priority,
-    required this.createdAt,
-    this.photoPath,
-    this.completionPhotoPath,
-    this.resolutionNote,
-    this.ownerEmail,
-    this.latitude,
-    this.longitude,
-    this.department = 'Unassigned',
-    this.worker = 'Unassigned',
-    this.status = 'Pending',
-    this.verified = false,
-    this.rating = 0,
+  WorkerProfile({
+    required this.workerId,
+    required this.fullName,
+    required this.department,
+    required this.wardZone,
+    required this.officialEmail,
+    required this.mobile,
+    required this.designation,
+    this.bonusPoints = 120,
   });
+}
+
+class Complaint {
   final String id;
   final String category;
-  final String title;
   final String description;
-  final String priority;
-  final DateTime createdAt;
-  final String? photoPath;
+  final String severity;
+  final String location;
+  String
+  status; // Pending, In Progress, Resolved / Awaiting Verification, Closed
+  final String citizenEmail;
+  String? assignedWorker;
+  String? completionNote;
   String? completionPhotoPath;
-  String? resolutionNote;
-  final String? ownerEmail;
-  final double? latitude;
-  final double? longitude;
-  String department;
-  String worker;
-  String status;
-  bool verified;
-  int rating;
-  String get location => latitude == null || longitude == null
-      ? 'Location not captured'
-      : '${latitude!.toStringAsFixed(5)}, ${longitude!.toStringAsFixed(5)}';
+  int? citizenRating;
+  String? citizenFeedback;
+  bool isFusedIncident;
+  final DateTime submissionTime;
+
+  Complaint({
+    required this.id,
+    required this.category,
+    required this.description,
+    required this.severity,
+    required this.location,
+    required this.status,
+    required this.citizenEmail,
+    this.assignedWorker,
+    this.completionNote,
+    this.completionPhotoPath,
+    this.citizenRating,
+    this.citizenFeedback,
+    this.isFusedIncident = false,
+    DateTime? submissionTime,
+  }) : submissionTime = submissionTime ?? DateTime.now();
 }
 
-class SahaySetuState extends ChangeNotifier {
-  String? currentCitizenEmail;
-  int _nextId = 1026;
-  final List<CivicComplaint> complaints = [
-    CivicComplaint(
-      id: 'SS-1024',
-      category: 'Road Damage',
-      title: 'Pothole near main gate',
-      description: 'Large pothole causing difficulty for vehicles.',
-      priority: 'High',
-      createdAt: DateTime.now().subtract(const Duration(hours: 6)),
-      latitude: 28.6139,
-      longitude: 77.2090,
-      department: 'Roads',
-      worker: 'Rahul Sharma',
-      status: 'In Progress',
-    ),
-    CivicComplaint(
-      id: 'SS-1025',
-      category: 'Street Light',
-      title: 'Street light not working',
-      description: 'Street light is not working near the community gate.',
-      priority: 'Medium',
-      createdAt: DateTime.now().subtract(const Duration(hours: 2)),
-      latitude: 28.6200,
-      longitude: 77.2150,
-      department: 'Electrical',
-      worker: 'Amit Kumar',
-      status: 'Pending',
+class AppDatabase {
+  static List<UserProfile> registeredUsers = [
+    UserProfile(
+      fullName: 'Jagriti Singhal',
+      email: 'citizen@gmail.com',
+      password: 'Password@123',
+      mobile: '9876543210',
     ),
   ];
-  CivicComplaint addComplaint({
-    required String category,
-    required String description,
-    required String priority,
-    String? photoPath,
-    String? ownerEmail,
-    double? latitude,
-    double? longitude,
-  }) {
-    final complaint = CivicComplaint(
-      id: 'SS-${_nextId++}',
-      category: category,
-      title: '$category complaint',
-      description: description,
-      priority: priority,
-      createdAt: DateTime.now(),
-      photoPath: photoPath,
-      ownerEmail: ownerEmail,
-      latitude: latitude,
-      longitude: longitude,
+
+  static List<WorkerProfile> workerProfiles = [
+    WorkerProfile(
+      workerId: 'rajesh@sahaysetu',
+      fullName: 'Rajesh Kumar',
+      department: 'Pothole & Road Damage',
+      wardZone: 'Ward 42 (Connaught Zone)',
+      officialEmail: 'rajesh.k@muncipal.gov.in',
+      mobile: '9811223344',
+      designation: 'Senior Road Inspector',
+      bonusPoints: 150,
+    ),
+    WorkerProfile(
+      workerId: 'ramu@sahaysetu',
+      fullName: 'Ramu Sharma',
+      department: 'Broken Streetlight',
+      wardZone: 'Ward 15 (Nehru Place Zone)',
+      officialEmail: 'ramu.s@muncipal.gov.in',
+      mobile: '9977665544',
+      designation: 'Electrical Maintenance Crew Lead',
+      bonusPoints: 95,
+    ),
+  ];
+
+  static List<Complaint> complaints = [
+    Complaint(
+      id: 'SS-1024',
+      category: 'Pothole & Road Damage',
+      description: 'Deep pothole near main gate causing traffic slowdown.',
+      severity: 'High',
+      location: 'Sector 62, Main Road',
+      status: 'In Progress',
+      citizenEmail: 'citizen@gmail.com',
+      assignedWorker: 'rajesh@sahaysetu',
+      isFusedIncident: true,
+    ),
+    Complaint(
+      id: 'SS-1025',
+      category: 'Broken Streetlight',
+      description:
+          'Streetlight pole #42 is flickering and completely dark at night.',
+      severity: 'Medium',
+      location: 'Nehru Place, Delhi',
+      status: 'Pending',
+      citizenEmail: 'citizen@gmail.com',
+      assignedWorker: 'ramu@sahaysetu',
+    ),
+  ];
+}
+
+// ==========================================
+// APP ROOT
+// ==========================================
+class SahaySetuApp extends StatelessWidget {
+  const SahaySetuApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: appTheme,
+      builder: (context, _) {
+        return MaterialApp(
+          title: 'SahaySetu',
+          debugShowCheckedModeBanner: false,
+          themeMode: appTheme.isDarkMode ? ThemeMode.dark : ThemeMode.light,
+          theme: ThemeData(
+            primarySwatch: Colors.blue,
+            primaryColor: appTheme.primaryColor,
+            scaffoldBackgroundColor: const Color(0xFFF8FAFC),
+            appBarTheme: AppBarTheme(
+              backgroundColor: appTheme.primaryColor,
+              foregroundColor: Colors.white,
+              elevation: 0,
+            ),
+            elevatedButtonTheme: ElevatedButtonThemeData(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: appTheme.primaryColor,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                padding: const EdgeInsets.symmetric(
+                  vertical: 14,
+                  horizontal: 16,
+                ),
+              ),
+            ),
+          ),
+          darkTheme: ThemeData(
+            brightness: Brightness.dark,
+            primaryColor: appTheme.primaryColor,
+            scaffoldBackgroundColor: const Color(0xFF0F172A),
+            appBarTheme: const AppBarTheme(
+              backgroundColor: Color(0xFF1E293B),
+              foregroundColor: Colors.white,
+              elevation: 0,
+            ),
+            elevatedButtonTheme: ElevatedButtonThemeData(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: appTheme.primaryColor,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                padding: const EdgeInsets.symmetric(
+                  vertical: 14,
+                  horizontal: 16,
+                ),
+              ),
+            ),
+          ),
+          home: const RoleSelectionScreen(),
+        );
+      },
     );
-    complaints.insert(0, complaint);
-    notifyListeners();
-    return complaint;
   }
-
-  void assign(CivicComplaint c, String department, String worker) {
-    c.department = department;
-    c.worker = worker;
-    if (c.status == 'Pending') c.status = 'Assigned';
-    notifyListeners();
-  }
-
-  void updateStatus(
-    CivicComplaint c,
-    String status, {
-    String? completionPhotoPath,
-    String? resolutionNote,
-  }) {
-    c.status = status;
-    if (completionPhotoPath != null) {
-      c.completionPhotoPath = completionPhotoPath;
-    }
-    if (resolutionNote != null) {
-      c.resolutionNote = resolutionNote;
-    }
-    notifyListeners();
-  }
-
-  void verify(CivicComplaint c, int rating) {
-    c.verified = true;
-    c.rating = rating;
-    c.status = 'Closed';
-    notifyListeners();
-  }
-
-  int get activeCount => complaints.where((c) => c.status != 'Closed').length;
-  int get resolvedCount => complaints
-      .where((c) => c.status == 'Resolved' || c.status == 'Closed')
-      .length;
-  int get healthScore => complaints.isEmpty
-      ? 100
-      : ((complaints.where((c) => c.status == 'Closed').length /
-                    complaints.length) *
-                100)
-            .round();
 }
 
-class RoleLoginScreen extends StatefulWidget {
-  const RoleLoginScreen({super.key});
-  @override
-  State<RoleLoginScreen> createState() => _RoleLoginScreenState();
-}
-
-class _RoleLoginScreenState extends State<RoleLoginScreen> {
-  AppRole role = AppRole.citizen;
-  final formKey = GlobalKey<FormState>();
-  final emailController = TextEditingController();
-  final passwordController = TextEditingController();
-  final confirmPasswordController = TextEditingController();
-  bool obscurePassword = true;
-  bool signingUp = false;
+// ==========================================
+// ROLE SELECTION SCREEN
+// ==========================================
+class RoleSelectionScreen extends StatelessWidget {
+  const RoleSelectionScreen({super.key});
 
   @override
-  void dispose() {
-    emailController.dispose();
-    passwordController.dispose();
-    confirmPasswordController.dispose();
-    super.dispose();
-  }
-
-  String? validatePassword(String? value) {
-    final password = value ?? '';
-    if (password.isEmpty) return 'Please enter your password';
-    if (password.length < 8) return 'Use at least 8 characters';
-    if (!RegExp(r'[A-Za-z]').hasMatch(password)) return 'Include a letter';
-    if (!RegExp(r'\d').hasMatch(password)) return 'Include a number';
-    if (!RegExp(r'[^A-Za-z0-9]').hasMatch(password)) {
-      return 'Include a symbol (e.g. @ or #)';
-    }
-    return null;
-  }
-
-  void showError(String text) => message(context, text);
-
-  void login() {
-    FocusScope.of(context).unfocus();
-    if (!(formKey.currentState?.validate() ?? false)) return;
-    final email = emailController.text.trim().toLowerCase();
-    final password = passwordController.text;
-    if (role == AppRole.citizen) {
-      final account = demoCitizenAccounts[email];
-      if (account == null || account.password != password) {
-        showError('Invalid email or password. Please try again.');
-        return;
-      }
-      appState.currentCitizenEmail = account.email;
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(
-          builder: (_) => CitizenHome(
-            name: account.name,
-            email: account.email,
-            phone: account.phone,
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            colors: [Color(0xFF0F172A), Color(0xFF1E293B)],
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
           ),
         ),
-      );
-      return;
-    }
-    // Demo credentials only. Replace with backend-issued worker credentials later.
-    final workerName = email.split('@').first;
-    if (!demoWorkerAccounts.containsKey(email) ||
-        demoWorkerAccounts[email] != password) {
-      showError('Invalid username or password. Please try again.');
-      return;
-    }
-    final displayName = workerName.isEmpty
-        ? 'Field Worker'
-        : '${workerName[0].toUpperCase()}${workerName.substring(1)}';
-    Navigator.pushReplacement(
-      context,
-      MaterialPageRoute(builder: (_) => WorkerHome(name: displayName)),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) => Scaffold(
-    body: SafeArea(
-      child: Center(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 460),
-            child: Form(
-              key: formKey,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  const SizedBox(height: 24),
-                  const CircleAvatar(
-                    radius: 38,
-                    child: Icon(Icons.location_city, size: 42),
+        child: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(24.0),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(
+                  Icons.shield_rounded,
+                  size: 80,
+                  color: Color(0xFF38BDF8),
+                ),
+                const SizedBox(height: 16),
+                const Text(
+                  'SahaySetu',
+                  style: TextStyle(
+                    fontSize: 32,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                    letterSpacing: 1.2,
                   ),
-                  const SizedBox(height: 16),
-                  const Text(
-                    'SahaySetu',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 32, fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(height: 6),
-                  const Text(
-                    'Smart Civic Complaint Management',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: Colors.black54),
-                  ),
-                  const SizedBox(height: 30),
-                  const Text(
-                    'Continue as',
-                    style: TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(height: 10),
-                  SegmentedButton<AppRole>(
-                    segments: const [
-                      ButtonSegment(
-                        value: AppRole.citizen,
-                        label: Text('Citizen'),
-                        icon: Icon(Icons.person_outline),
-                      ),
-                      ButtonSegment(
-                        value: AppRole.worker,
-                        label: Text('Worker'),
-                        icon: Icon(Icons.engineering_outlined),
-                      ),
-                    ],
-                    selected: {role},
-                    onSelectionChanged: (s) => setState(() {
-                      role = s.first;
-                      signingUp = false;
-                      formKey.currentState?.reset();
-                      passwordController.clear();
-                      confirmPasswordController.clear();
-                      emailController.clear();
-                    }),
-                  ),
-                  const SizedBox(height: 18),
-                  Text(
-                    role == AppRole.citizen
-                        ? (signingUp
-                              ? 'Create citizen account'
-                              : 'Citizen sign in')
-                        : 'Worker sign in',
-                    style: const TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  TextFormField(
-                    controller: emailController,
-                    keyboardType: TextInputType.emailAddress,
-                    textInputAction: TextInputAction.next,
-                    decoration: const InputDecoration(
-                      labelText: 'Email address',
-                      prefixIcon: Icon(Icons.email_outlined),
-                    ),
-                    validator: (value) {
-                      final v = value?.trim().toLowerCase() ?? '';
-                      if (v.isEmpty) {
-                        return role == AppRole.worker
-                            ? 'Please enter your username'
-                            : 'Please enter your email';
-                      }
-                      if (role == AppRole.worker) {
-                        if (!RegExp(r'^[a-z]+@sahaysetu$').hasMatch(v)) {
-                          return 'Use workerfirstname@sahaysetu';
-                        }
-                        return null;
-                      }
-                      if (!v.contains('@') || !v.contains('.')) {
-                        return 'Enter a valid email';
-                      }
-                      return null;
-                    },
-                  ),
-                  const SizedBox(height: 14),
-                  TextFormField(
-                    controller: passwordController,
-                    obscureText: obscurePassword,
-                    textInputAction: signingUp
-                        ? TextInputAction.next
-                        : TextInputAction.done,
-                    onFieldSubmitted: (_) {
-                      if (!signingUp) login();
-                    },
-                    decoration: InputDecoration(
-                      labelText: 'Password',
-                      prefixIcon: const Icon(Icons.lock_outline),
-                      helperText: signingUp
-                          ? 'Use at least 8 characters'
-                          : null,
-                      suffixIcon: IconButton(
-                        icon: Icon(
-                          obscurePassword
-                              ? Icons.visibility
-                              : Icons.visibility_off,
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Intelligent Civic Infrastructure Management',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 14, color: Colors.white70),
+                ),
+                const SizedBox(height: 48),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => const CitizenAuthScreen(),
                         ),
-                        onPressed: () =>
-                            setState(() => obscurePassword = !obscurePassword),
-                      ),
-                    ),
-                    validator: (value) {
-                      if (role == AppRole.worker) {
-                        return (value ?? '').isEmpty
-                            ? 'Please enter your password'
-                            : null;
-                      }
-                      return validatePassword(value);
+                      );
                     },
-                  ),
-                  if (role == AppRole.citizen && signingUp) ...[
-                    const SizedBox(height: 14),
-                    TextFormField(
-                      controller: confirmPasswordController,
-                      obscureText: obscurePassword,
-                      textInputAction: TextInputAction.next,
-                      decoration: const InputDecoration(
-                        labelText: 'Confirm password',
-                        prefixIcon: Icon(Icons.lock_reset_outlined),
-                      ),
-                      validator: (value) {
-                        if ((value ?? '').isEmpty) {
-                          return 'Please confirm your password';
-                        }
-                        if (value != passwordController.text) {
-                          return 'Passwords do not match';
-                        }
-                        return null;
-                      },
-                    ),
-                    const SizedBox(height: 14),
-                    _SignupExtraFields(
-                      onValuesChanged: (name, phone) {
-                        _signupName = name;
-                        _signupPhone = phone;
-                      },
-                    ),
-                  ],
-                  const SizedBox(height: 20),
-                  FilledButton(
-                    onPressed: signingUp ? _createAccount : login,
-                    child: Padding(
-                      padding: const EdgeInsets.all(14),
-                      child: Text(signingUp ? 'Create Account' : 'Sign In'),
+                    icon: const Icon(Icons.person),
+                    label: const Text(
+                      'Citizen Portal',
+                      style: TextStyle(fontSize: 16),
                     ),
                   ),
-                  if (role == AppRole.citizen)
-                    TextButton(
-                      onPressed: () => setState(() {
-                        signingUp = !signingUp;
-                        formKey.currentState?.reset();
-                        confirmPasswordController.clear();
-                      }),
-                      child: Text(
-                        signingUp
-                            ? 'Already have an account? Sign in'
-                            : 'New citizen? Create an account',
+                ),
+                const SizedBox(height: 16),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => const WorkerLoginScreen(),
+                        ),
+                      );
+                    },
+                    style: OutlinedButton.styleFrom(
+                      side: const BorderSide(color: Color(0xFF38BDF8)),
+                      foregroundColor: const Color(0xFF38BDF8),
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
                       ),
                     ),
-                  if (role == AppRole.worker)
-                    const Padding(
-                      padding: EdgeInsets.all(12),
-                      child: Text(
-                        'Worker accounts are issued and managed by municipal authorities.',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(color: Colors.black54),
-                      ),
+                    icon: const Icon(Icons.engineering),
+                    label: const Text(
+                      'Field Worker Portal',
+                      style: TextStyle(fontSize: 16),
                     ),
-                ],
-              ),
+                  ),
+                ),
+              ],
             ),
           ),
         ),
       ),
-    ),
-  );
-
-  String _signupName = '';
-  String _signupPhone = '';
-
-  void _createAccount() {
-    FocusScope.of(context).unfocus();
-    if (!(formKey.currentState?.validate() ?? false)) return;
-    final email = emailController.text.trim().toLowerCase();
-    if (_signupName.trim().isEmpty) {
-      showError('Please enter your full name.');
-      return;
-    }
-    if (_signupPhone.trim().length < 10) {
-      showError('Please enter a valid phone number.');
-      return;
-    }
-    if (demoCitizenAccounts.containsKey(email)) {
-      showError('An account with this email already exists.');
-      return;
-    }
-    if (confirmPasswordController.text != passwordController.text) {
-      showError('Passwords do not match.');
-      return;
-    }
-    demoCitizenAccounts[email] = DemoCitizenAccount(
-      name: _signupName.trim(),
-      email: email,
-      phone: _signupPhone.trim(),
-      password: passwordController.text,
     );
-    appState.currentCitizenEmail = email;
-    Navigator.pushReplacement(
-      context,
-      MaterialPageRoute(
-        builder: (_) => CitizenHome(
-          name: _signupName.trim(),
-          email: email,
-          phone: _signupPhone.trim(),
+  }
+}
+
+// ==========================================
+// CITIZEN AUTHENTICATION
+// ==========================================
+class CitizenAuthScreen extends StatefulWidget {
+  const CitizenAuthScreen({super.key});
+
+  @override
+  State<CitizenAuthScreen> createState() => _CitizenAuthScreenState();
+}
+
+class _CitizenAuthScreenState extends State<CitizenAuthScreen> {
+  bool isLoginMode = true;
+  bool _obscurePassword = true;
+  bool _obscureConfirmPassword = true;
+  final _formKey = GlobalKey<FormState>();
+
+  final TextEditingController _emailController = TextEditingController();
+  final TextEditingController _passwordController = TextEditingController();
+  final TextEditingController _confirmPasswordController =
+      TextEditingController();
+  final TextEditingController _fullNameController = TextEditingController();
+  final TextEditingController _mobileController = TextEditingController();
+
+  void _clearFields() {
+    _emailController.clear();
+    _passwordController.clear();
+    _confirmPasswordController.clear();
+    _fullNameController.clear();
+    _mobileController.clear();
+  }
+
+  void _toggleAuthMode() {
+    setState(() {
+      isLoginMode = !isLoginMode;
+      _clearFields();
+    });
+  }
+
+  void _handleAuthSubmit() {
+    if (_formKey.currentState!.validate()) {
+      if (isLoginMode) {
+        final foundUser = AppDatabase.registeredUsers.firstWhere(
+          (u) =>
+              u.email.trim().toLowerCase() ==
+                  _emailController.text.trim().toLowerCase() &&
+              u.password == _passwordController.text,
+          orElse: () =>
+              UserProfile(fullName: '', email: '', password: '', mobile: ''),
+        );
+
+        if (foundUser.email.isNotEmpty) {
+          _clearFields();
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (context) =>
+                  CitizenDashboardScreen(currentUser: foundUser),
+            ),
+          );
+        } else {
+          showDialog(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: const Text('Invalid Login'),
+              content: const Text(
+                'No account found with this Gmail ID, or incorrect password. Please check your credentials or sign up.',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('OK'),
+                ),
+              ],
+            ),
+          );
+        }
+      } else {
+        _showOtpVerificationDialog(
+          onVerified: () {
+            final newUser = UserProfile(
+              fullName: _fullNameController.text.trim(),
+              email: _emailController.text.trim(),
+              password: _passwordController.text,
+              mobile: _mobileController.text.trim(),
+            );
+            AppDatabase.registeredUsers.add(newUser);
+
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Account created successfully! Please sign in.'),
+              ),
+            );
+            _toggleAuthMode();
+          },
+        );
+      }
+    }
+  }
+
+  void _showOtpVerificationDialog({required VoidCallback onVerified}) {
+    final TextEditingController otpController = TextEditingController();
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Text('OTP Verification'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              'An OTP has been sent to ${_mobileController.text}. (Enter any 4 digits like 1234)',
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: otpController,
+              keyboardType: TextInputType.number,
+              maxLength: 4,
+              decoration: const InputDecoration(
+                labelText: 'Enter 4-digit OTP',
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          ElevatedButton(
+            onPressed: () {
+              if (otpController.text.length == 4) {
+                Navigator.pop(context);
+                onVerified();
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Please enter a valid 4-digit OTP'),
+                  ),
+                );
+              }
+            },
+            child: const Text('Verify & Complete'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(isLoginMode ? 'Citizen Sign In' : 'Citizen Sign Up'),
+      ),
+      body: Padding(
+        padding: const EdgeInsets.all(24.0),
+        child: Form(
+          key: _formKey,
+          child: ListView(
+            children: [
+              const SizedBox(height: 10),
+              Text(
+                isLoginMode ? 'Welcome Back!' : 'Create New Account',
+                style: const TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 6),
+              const Text(
+                'Use your Gmail ID to access civic services.',
+                style: TextStyle(color: Colors.grey),
+              ),
+              const SizedBox(height: 24),
+              if (!isLoginMode) ...[
+                TextFormField(
+                  controller: _fullNameController,
+                  decoration: const InputDecoration(
+                    labelText: 'Full Name',
+                    border: OutlineInputBorder(),
+                  ),
+                  validator: (val) => val == null || val.isEmpty
+                      ? 'Enter your full name'
+                      : null,
+                ),
+                const SizedBox(height: 16),
+                TextFormField(
+                  controller: _mobileController,
+                  keyboardType: TextInputType.phone,
+                  maxLength: 10,
+                  decoration: const InputDecoration(
+                    labelText: 'Mobile Number',
+                    border: OutlineInputBorder(),
+                  ),
+                  validator: (val) => val == null || val.length != 10
+                      ? 'Enter a valid 10-digit mobile number'
+                      : null,
+                ),
+                const SizedBox(height: 16),
+              ],
+              TextFormField(
+                controller: _emailController,
+                keyboardType: TextInputType.emailAddress,
+                decoration: const InputDecoration(
+                  labelText: 'Gmail ID',
+                  hintText: 'example@gmail.com',
+                  border: OutlineInputBorder(),
+                  prefixIcon: Icon(Icons.email),
+                ),
+                validator: (val) {
+                  if (val == null || !val.trim().endsWith('@gmail.com')) {
+                    return 'Please enter a valid @gmail.com address';
+                  }
+                  return null;
+                },
+              ),
+              const SizedBox(height: 16),
+              TextFormField(
+                controller: _passwordController,
+                obscureText: _obscurePassword,
+                decoration: InputDecoration(
+                  labelText: 'Password',
+                  border: const OutlineInputBorder(),
+                  helperText: 'Min 8 chars: include uppercase, number & symbol',
+                  helperMaxLines: 2,
+                  suffixIcon: IconButton(
+                    icon: Icon(
+                      _obscurePassword
+                          ? Icons.visibility_off
+                          : Icons.visibility,
+                    ),
+                    onPressed: () =>
+                        setState(() => _obscurePassword = !_obscurePassword),
+                  ),
+                ),
+                validator: (val) {
+                  if (val == null || val.length < 8) {
+                    return 'Password must be at least 8 characters long';
+                  }
+                  if (!RegExp(r'[A-Z]').hasMatch(val) ||
+                      !RegExp(r'[0-9]').hasMatch(val) ||
+                      !RegExp(r'[!@#$%^&*(),.?":{}|<>]').hasMatch(val)) {
+                    return 'Must include letters, numbers & symbols';
+                  }
+                  return null;
+                },
+              ),
+              if (!isLoginMode) ...[
+                const SizedBox(height: 16),
+                TextFormField(
+                  controller: _confirmPasswordController,
+                  obscureText: _obscureConfirmPassword,
+                  decoration: InputDecoration(
+                    labelText: 'Confirm Password',
+                    border: const OutlineInputBorder(),
+                    suffixIcon: IconButton(
+                      icon: Icon(
+                        _obscureConfirmPassword
+                            ? Icons.visibility_off
+                            : Icons.visibility,
+                      ),
+                      onPressed: () => setState(
+                        () =>
+                            _obscureConfirmPassword = !_obscureConfirmPassword,
+                      ),
+                    ),
+                  ),
+                  validator: (val) {
+                    if (val != _passwordController.text) {
+                      return 'Passwords do not match';
+                    }
+                    return null;
+                  },
+                ),
+              ],
+              if (isLoginMode) ...[
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton(
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => const ForgotPasswordScreen(),
+                        ),
+                      );
+                    },
+                    child: const Text('Forgot Password?'),
+                  ),
+                ),
+              ],
+              const SizedBox(height: 16),
+              ElevatedButton(
+                onPressed: _handleAuthSubmit,
+                child: Text(
+                  isLoginMode ? 'Sign In' : 'Generate OTP & Register',
+                ),
+              ),
+              TextButton(
+                onPressed: _toggleAuthMode,
+                child: Text(
+                  isLoginMode
+                      ? 'Don\'t have an account? Sign Up'
+                      : 'Already have an account? Sign In',
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 }
 
-class _SignupExtraFields extends StatefulWidget {
-  const _SignupExtraFields({required this.onValuesChanged});
-  final void Function(String name, String phone) onValuesChanged;
+// ==========================================
+// FORGOT PASSWORD SCREEN
+// ==========================================
+class ForgotPasswordScreen extends StatefulWidget {
+  const ForgotPasswordScreen({super.key});
+
   @override
-  State<_SignupExtraFields> createState() => _SignupExtraFieldsState();
+  State<ForgotPasswordScreen> createState() => _ForgotPasswordScreenState();
 }
 
-class _SignupExtraFieldsState extends State<_SignupExtraFields> {
-  final nameController = TextEditingController();
-  final phoneController = TextEditingController();
-  @override
-  void dispose() {
-    nameController.dispose();
-    phoneController.dispose();
-    super.dispose();
+class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
+  final TextEditingController _mobileController = TextEditingController();
+  bool otpSent = false;
+  bool _obscureNewPass = true;
+  final TextEditingController _otpController = TextEditingController();
+  final TextEditingController _newPasswordController = TextEditingController();
+
+  void _sendOtp() {
+    if (_mobileController.text.length == 10) {
+      setState(() => otpSent = true);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('OTP sent successfully to your mobile number!'),
+        ),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please enter a valid 10-digit mobile number'),
+        ),
+      );
+    }
+  }
+
+  void _resetPassword() {
+    if (_otpController.text.length == 4 &&
+        _newPasswordController.text.length >= 8) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Password reset successfully! Please sign in with your new credentials.',
+          ),
+        ),
+      );
+      Navigator.pop(context);
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Enter valid 4-digit OTP and secure password (min 8 chars).',
+          ),
+        ),
+      );
+    }
   }
 
   @override
-  Widget build(BuildContext context) => Column(
-    children: [
-      TextFormField(
-        controller: nameController,
-        textCapitalization: TextCapitalization.words,
-        decoration: const InputDecoration(
-          labelText: 'Full name',
-          prefixIcon: Icon(Icons.badge_outlined),
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Forgot Password')),
+      body: Padding(
+        padding: const EdgeInsets.all(24.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Retrieve your account or reset password using your registered mobile number.',
+              style: TextStyle(fontSize: 15, color: Colors.grey),
+            ),
+            const SizedBox(height: 20),
+            TextField(
+              controller: _mobileController,
+              keyboardType: TextInputType.phone,
+              maxLength: 10,
+              decoration: const InputDecoration(
+                labelText: 'Registered Mobile Number',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 10),
+            if (!otpSent)
+              ElevatedButton(onPressed: _sendOtp, child: const Text('Send OTP'))
+            else ...[
+              TextField(
+                controller: _otpController,
+                maxLength: 4,
+                decoration: const InputDecoration(
+                  labelText: 'Enter 4-digit OTP',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _newPasswordController,
+                obscureText: _obscureNewPass,
+                decoration: InputDecoration(
+                  labelText: 'New Password',
+                  border: const OutlineInputBorder(),
+                  suffixIcon: IconButton(
+                    icon: Icon(
+                      _obscureNewPass ? Icons.visibility_off : Icons.visibility,
+                    ),
+                    onPressed: () =>
+                        setState(() => _obscureNewPass = !_obscureNewPass),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              ElevatedButton(
+                onPressed: _resetPassword,
+                child: const Text('Update Password'),
+              ),
+            ],
+          ],
         ),
-        validator: (v) => v == null || v.trim().isEmpty
-            ? 'Please enter your full name'
-            : null,
-        onChanged: (_) =>
-            widget.onValuesChanged(nameController.text, phoneController.text),
       ),
-      const SizedBox(height: 14),
-      TextFormField(
-        controller: phoneController,
-        keyboardType: TextInputType.phone,
-        decoration: const InputDecoration(
-          labelText: 'Phone number',
-          prefixIcon: Icon(Icons.phone_outlined),
-        ),
-        validator: (v) => v == null || v.trim().length < 10
-            ? 'Enter at least 10 digits'
-            : null,
-        onChanged: (_) =>
-            widget.onValuesChanged(nameController.text, phoneController.text),
-      ),
-    ],
-  );
+    );
+  }
 }
 
-class BaseHome extends StatelessWidget {
-  const BaseHome({
-    super.key,
-    required this.title,
-    required this.name,
-    required this.buildChildren,
-    this.email = '',
-    this.phone = '',
-    this.isCitizen = false,
-  });
-  final String title, name, email, phone;
-  final bool isCitizen;
-  final List<Widget> Function() buildChildren;
+// ==========================================
+// CITIZEN DASHBOARD & SIDE MENU (DRAWER)
+// ==========================================
+class CitizenDashboardScreen extends StatefulWidget {
+  final UserProfile currentUser;
+  const CitizenDashboardScreen({super.key, required this.currentUser});
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: Text(title)),
-    drawer: Drawer(
-      child: SafeArea(
+  State<CitizenDashboardScreen> createState() => _CitizenDashboardScreenState();
+}
+
+class _CitizenDashboardScreenState extends State<CitizenDashboardScreen> {
+  @override
+  Widget build(BuildContext context) {
+    final userComplaints = AppDatabase.complaints
+        .where(
+          (c) =>
+              c.citizenEmail.trim().toLowerCase() ==
+              widget.currentUser.email.trim().toLowerCase(),
+        )
+        .toList();
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('Citizen Dashboard')),
+      drawer: Drawer(
         child: ListView(
           padding: EdgeInsets.zero,
           children: [
             UserAccountsDrawerHeader(
-              accountName: Text(name),
-              accountEmail: Text(
-                email.isEmpty
-                    ? (isCitizen ? 'Citizen account' : 'Demo worker account')
-                    : email,
+              accountName: Text(
+                widget.currentUser.fullName,
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                ),
               ),
-              currentAccountPicture: const CircleAvatar(
-                child: Icon(Icons.person, size: 32),
+              accountEmail: Text(widget.currentUser.email),
+              currentAccountPicture: CircleAvatar(
+                backgroundColor: Colors.white,
+                backgroundImage: widget.currentUser.profileImagePath != null
+                    ? FileImage(File(widget.currentUser.profileImagePath!))
+                    : null,
+                child: widget.currentUser.profileImagePath == null
+                    ? const Icon(
+                        Icons.person,
+                        size: 40,
+                        color: Color(0xFF2563EB),
+                      )
+                    : null,
               ),
+              decoration: BoxDecoration(color: appTheme.primaryColor),
             ),
             ListTile(
-              leading: const Icon(Icons.person_outline),
-              title: const Text('Profile'),
+              leading: const Icon(Icons.dashboard),
+              title: const Text('Dashboard'),
+              onTap: () => Navigator.pop(context),
+            ),
+            ListTile(
+              leading: const Icon(Icons.person),
+              title: const Text('Profile Details'),
+              onTap: () async {
+                Navigator.pop(context);
+                await Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) =>
+                        ProfileScreen(user: widget.currentUser),
+                  ),
+                );
+                setState(() {});
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.history),
+              title: const Text('Previous Records & Complaints'),
               onTap: () {
                 Navigator.pop(context);
                 Navigator.push(
                   context,
                   MaterialPageRoute(
-                    builder: (_) => ProfileScreen(
-                      name: name,
-                      email: email,
-                      phone: phone,
-                      isCitizen: isCitizen,
+                    builder: (context) => PreviousComplaintsScreen(
+                      userEmail: widget.currentUser.email,
                     ),
                   ),
                 );
               },
             ),
             ListTile(
-              leading: const Icon(Icons.settings_outlined),
+              leading: const Icon(Icons.map),
+              title: const Text('City Infrastructure Heatmap'),
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => const HeatmapScreen(),
+                  ),
+                );
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.settings),
               title: const Text('Settings'),
               onTap: () {
                 Navigator.pop(context);
                 Navigator.push(
                   context,
-                  MaterialPageRoute(builder: (_) => const SettingsScreen()),
+                  MaterialPageRoute(
+                    builder: (context) => const SettingsScreen(),
+                  ),
                 );
               },
             ),
-            if (isCitizen) ...[
-              ListTile(
-                leading: const Icon(Icons.history),
-                title: const Text('Previous Complaints / Records'),
-                onTap: () {
-                  Navigator.pop(context);
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => PreviousComplaintsScreen(name: name),
-                    ),
-                  );
-                },
-              ),
-              ListTile(
-                leading: const Icon(Icons.health_and_safety_outlined),
-                title: const Text('City Health Score'),
-                onTap: () {
-                  Navigator.pop(context);
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => const CityHealthScoreScreen(),
-                    ),
-                  );
-                },
-              ),
-            ],
             const Divider(),
             ListTile(
-              leading: const Icon(Icons.logout),
-              title: const Text('Logout'),
+              leading: const Icon(Icons.logout, color: Colors.red),
+              title: const Text('Logout', style: TextStyle(color: Colors.red)),
               onTap: () {
-                appState.currentCitizenEmail = null;
                 Navigator.pushAndRemoveUntil(
                   context,
-                  MaterialPageRoute(builder: (_) => const RoleLoginScreen()),
-                  (_) => false,
+                  MaterialPageRoute(
+                    builder: (context) => const RoleSelectionScreen(),
+                  ),
+                  (route) => false,
                 );
               },
             ),
           ],
         ),
       ),
-    ),
-    body: AnimatedBuilder(
-      animation: appState,
-      builder: (context, _) => ListView(
+      body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          Text(
-            'Hello, $name',
-            style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+          const Row(
+            children: [
+              Icon(Icons.location_city, size: 20, color: Colors.grey),
+              SizedBox(width: 8),
+              Text(
+                'Assigned Zone: Ward 42 (Connaught Zone)',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: Colors.grey,
+                ),
+              ),
+            ],
           ),
-          const SizedBox(height: 5),
-          ...buildChildren(),
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [
+                  appTheme.primaryColor,
+                  appTheme.primaryColor.withValues(alpha: 0.8),
+                ],
+              ),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Row(
+                  children: [
+                    Icon(Icons.insights, color: Colors.white),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'City Health Score: 84 / 100',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Civic Incident Fusion active. 2 related complaints grouped into probable municipal incidents.',
+                  style: TextStyle(color: Colors.white70, fontSize: 13),
+                ),
+                const SizedBox(height: 12),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.white,
+                    foregroundColor: appTheme.primaryColor,
+                  ),
+                  onPressed: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => const HeatmapScreen(),
+                      ),
+                    );
+                  },
+                  child: const Text('View City Heatmap & Incidents'),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 20),
+          Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  'Active Complaints',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              const SizedBox(width: 8),
+              ElevatedButton.icon(
+                onPressed: () async {
+                  await Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => CreateComplaintScreen(
+                        userEmail: widget.currentUser.email,
+                      ),
+                    ),
+                  );
+                  setState(() {});
+                },
+                icon: const Icon(Icons.add, size: 16),
+                label: const Text(
+                  'New Complaint',
+                  style: TextStyle(fontSize: 13),
+                ),
+                style: ElevatedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 10,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          userComplaints.isEmpty
+              ? const Padding(
+                  padding: EdgeInsets.only(top: 40),
+                  child: Center(
+                    child: Text(
+                      'No complaints filed yet. Tap "New Complaint" to report an issue.',
+                      style: TextStyle(color: Colors.grey),
+                    ),
+                  ),
+                )
+              : ListView.builder(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  itemCount: userComplaints.length,
+                  itemBuilder: (context, index) {
+                    final complaint = userComplaints[index];
+                    bool isAwaitingVerification =
+                        complaint.status == 'Resolved / Awaiting Verification';
+
+                    return Card(
+                      margin: const EdgeInsets.only(bottom: 12),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.all(16.0),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text(
+                                  complaint.id,
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    color: appTheme.primaryColor,
+                                  ),
+                                ),
+                                Chip(
+                                  label: Text(
+                                    complaint.status,
+                                    style: const TextStyle(
+                                      fontSize: 11,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                  backgroundColor: _getStatusColor(
+                                    complaint.status,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              complaint.category,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 16,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              complaint.description,
+                              style: const TextStyle(color: Colors.white70),
+                            ),
+                            const SizedBox(height: 8),
+                            Row(
+                              children: [
+                                const Icon(
+                                  Icons.location_on,
+                                  size: 14,
+                                  color: Colors.grey,
+                                ),
+                                const SizedBox(width: 4),
+                                Expanded(
+                                  child: Text(
+                                    complaint.location,
+                                    style: const TextStyle(
+                                      fontSize: 12,
+                                      color: Colors.grey,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            if (complaint.completionNote != null) ...[
+                              const Divider(height: 16),
+                              Text(
+                                'Worker Note: ${complaint.completionNote}',
+                                style: const TextStyle(
+                                  fontStyle: FontStyle.italic,
+                                  fontSize: 13,
+                                ),
+                              ),
+                            ],
+                            if (isAwaitingVerification) ...[
+                              const SizedBox(height: 12),
+                              SizedBox(
+                                width: double.infinity,
+                                child: ElevatedButton.icon(
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: Colors.purple,
+                                    foregroundColor: Colors.white,
+                                  ),
+                                  onPressed: () async {
+                                    await Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (context) =>
+                                            CitizenFeedbackReviewScreen(
+                                              complaint: complaint,
+                                            ),
+                                      ),
+                                    );
+                                    setState(() {});
+                                  },
+                                  icon: const Icon(Icons.rate_review),
+                                  label: const Text(
+                                    'Review Work & Give Feedback',
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
         ],
       ),
-    ),
-  );
+    );
+  }
+
+  Color _getStatusColor(String status) {
+    switch (status) {
+      case 'Pending':
+        return Colors.orange;
+      case 'In Progress':
+        return Colors.blue;
+      case 'Resolved / Awaiting Verification':
+        return Colors.purple;
+      case 'Closed':
+        return Colors.green;
+      default:
+        return Colors.grey;
+    }
+  }
 }
 
-class ProfileScreen extends StatelessWidget {
-  const ProfileScreen({
-    super.key,
-    required this.name,
-    required this.email,
-    required this.phone,
-    required this.isCitizen,
-  });
-  final String name, email, phone;
-  final bool isCitizen;
+// ==========================================
+// CITIZEN FEEDBACK & REVIEW SCREEN
+// ==========================================
+class CitizenFeedbackReviewScreen extends StatefulWidget {
+  final Complaint complaint;
+  const CitizenFeedbackReviewScreen({super.key, required this.complaint});
+
   @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Profile')),
-    body: ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        const CircleAvatar(radius: 42, child: Icon(Icons.person, size: 42)),
-        const SizedBox(height: 18),
-        infoTile(Icons.badge_outlined, 'Name', name),
-        infoTile(
-          Icons.email_outlined,
-          'Email',
-          email.isEmpty ? 'Demo worker account' : email,
-        ),
-        if (isCitizen)
-          infoTile(
-            Icons.phone_outlined,
-            'Phone',
-            phone.isEmpty ? 'Not provided' : phone,
-          ),
-      ],
-    ),
-  );
+  State<CitizenFeedbackReviewScreen> createState() =>
+      _CitizenFeedbackReviewScreenState();
 }
 
+class _CitizenFeedbackReviewScreenState
+    extends State<CitizenFeedbackReviewScreen> {
+  int _rating = 5;
+  final TextEditingController _feedbackController = TextEditingController();
+
+  void _submitCitizenConfirmation(bool workDone) {
+    setState(() {
+      if (workDone) {
+        widget.complaint.status = 'Closed';
+        widget.complaint.citizenRating = _rating;
+        widget.complaint.citizenFeedback = _feedbackController.text.trim();
+
+        // Credit Bonus points to worker profile
+        if (widget.complaint.assignedWorker != null) {
+          final worker = AppDatabase.workerProfiles.firstWhere(
+            (w) =>
+                w.workerId.toLowerCase() ==
+                widget.complaint.assignedWorker!.toLowerCase(),
+            orElse: () => WorkerProfile(
+              workerId: '',
+              fullName: '',
+              department: '',
+              wardZone: '',
+              officialEmail: '',
+              mobile: '',
+              designation: '',
+              bonusPoints: 0,
+            ),
+          );
+          if (worker.workerId.isNotEmpty) {
+            worker.bonusPoints += 50; // Award bonus points
+          }
+        }
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Work verified & marked Closed! Bonus credited to worker.',
+            ),
+          ),
+        );
+      } else {
+        widget.complaint.status = 'In Progress';
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Marked as incomplete. Sent back to worker for re-evaluation.',
+            ),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+    });
+    Navigator.pop(context);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Verify Resolution & Feedback')),
+      body: Padding(
+        padding: const EdgeInsets.all(20.0),
+        child: ListView(
+          children: [
+            const Text(
+              'Worker Completion Report',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 12),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Ticket ID: ${widget.complaint.id}',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: appTheme.primaryColor,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text('Category: ${widget.complaint.category}'),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Resolution Note: ${widget.complaint.completionNote ?? "No notes provided"}',
+                      style: const TextStyle(fontStyle: FontStyle.italic),
+                    ),
+                    if (widget.complaint.completionPhotoPath != null) ...[
+                      const SizedBox(height: 12),
+                      const Text(
+                        'Completion Photo Proof:',
+                        style: TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                      const SizedBox(height: 8),
+                      Container(
+                        height: 150,
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(8),
+                          image: DecorationImage(
+                            image: FileImage(
+                              File(widget.complaint.completionPhotoPath!),
+                            ),
+                            fit: BoxFit.cover,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 20),
+            const Text(
+              'Rate Worker Performance',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: List.generate(5, (index) {
+                return IconButton(
+                  icon: Icon(
+                    index < _rating
+                        ? Icons.star_rounded
+                        : Icons.star_border_rounded,
+                    color: Colors.amber,
+                    size: 36,
+                  ),
+                  onPressed: () => setState(() => _rating = index + 1),
+                );
+              }),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _feedbackController,
+              maxLines: 2,
+              decoration: const InputDecoration(
+                labelText: 'Feedback / Comments for Worker',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 24),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.red,
+                      side: const BorderSide(color: Colors.red),
+                    ),
+                    onPressed: () => _submitCitizenConfirmation(false),
+                    child: const Text('Work Not Done'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.green,
+                    ),
+                    onPressed: () => _submitCitizenConfirmation(true),
+                    child: const Text('Confirm & Close Task'),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ==========================================
+// SETTINGS SCREEN
+// ==========================================
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
+
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  bool notifications = true;
-  bool locationReminder = true;
-  @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Settings')),
-    body: ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        SwitchListTile(
-          title: const Text('Complaint notifications'),
-          subtitle: const Text('Demo preference only'),
-          value: notifications,
-          onChanged: (v) => setState(() => notifications = v),
-        ),
-        SwitchListTile(
-          title: const Text('Location reminder'),
-          subtitle: const Text('Remind me to capture GPS while reporting'),
-          value: locationReminder,
-          onChanged: (v) => setState(() => locationReminder = v),
-        ),
-      ],
-    ),
-  );
-}
+  bool _pushNotifications = true;
+  bool _locationTracking = true;
+  bool _civicAlerts = true;
 
-class PreviousComplaintsScreen extends StatelessWidget {
-  const PreviousComplaintsScreen({super.key, required this.name});
-  final String name;
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Previous Complaints')),
-      body: AnimatedBuilder(
-        animation: appState,
-        builder: (context, _) {
-          final mine = appState.complaints
-              .where((c) => c.ownerEmail == appState.currentCitizenEmail)
-              .toList();
-          if (mine.isEmpty) {
-            return const Center(
-              child: Text(
-                'No complaints yet. Report your first civic issue to see it here.',
+      appBar: AppBar(title: const Text('App Settings')),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          const Text(
+            'Appearance & Theme',
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+              color: Colors.blueAccent,
+            ),
+          ),
+          const SizedBox(height: 8),
+          SwitchListTile(
+            title: const Text('Dark Mode'),
+            subtitle: const Text('Enable dark appearance for night usage'),
+            value: appTheme.isDarkMode,
+            onChanged: (val) {
+              setState(() {
+                appTheme.toggleTheme(val);
+              });
+            },
+          ),
+          const Divider(),
+          const Text(
+            'Accent Color Theme',
+            style: TextStyle(fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceAround,
+            children: [
+              _colorButton(const Color(0xFF2563EB), 'Blue'),
+              _colorButton(const Color(0xFF16A34A), 'Green'),
+              _colorButton(const Color(0xFF9333EA), 'Purple'),
+              _colorButton(const Color(0xFFDC2626), 'Red'),
+            ],
+          ),
+          const Divider(height: 32),
+          const Text(
+            'Notifications & Privacy',
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+              color: Colors.blueAccent,
+            ),
+          ),
+          const SizedBox(height: 8),
+          SwitchListTile(
+            title: const Text('Push Notifications'),
+            subtitle: const Text('Civic SLA & Field Status Updates'),
+            value: _pushNotifications,
+            onChanged: (val) => setState(() => _pushNotifications = val),
+          ),
+          SwitchListTile(
+            title: const Text('Emergency Civic Alerts'),
+            subtitle: const Text(
+              'Receive broadcast warnings about municipal hazards',
+            ),
+            value: _civicAlerts,
+            onChanged: (val) => setState(() => _civicAlerts = val),
+          ),
+          SwitchListTile(
+            title: const Text('Precise GPS Location'),
+            subtitle: const Text('Allow geotagging for complaint submission'),
+            value: _locationTracking,
+            onChanged: (val) => setState(() => _locationTracking = val),
+          ),
+          const Divider(height: 32),
+          const Text(
+            'Data & Storage',
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+              color: Colors.blueAccent,
+            ),
+          ),
+          const SizedBox(height: 8),
+          ListTile(
+            leading: const Icon(Icons.delete_sweep),
+            title: const Text('Clear App Cache'),
+            subtitle: const Text(
+              'Frees up local storage used for temporary camera evidence',
+            ),
+            onTap: () {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('App cache cleared successfully!'),
+                ),
+              );
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.download),
+            title: const Text('Export Complaint Reports (CSV)'),
+            subtitle: const Text(
+              'Downloads offline CSV record of all reported complaints',
+            ),
+            onTap: () {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text(
+                    'Complaint log exported to device storage (CSV).',
+                  ),
+                ),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _colorButton(Color color, String name) {
+    bool isSelected = appTheme.primaryColor.toARGB32() == color.toARGB32();
+    return GestureDetector(
+      onTap: () {
+        setState(() {
+          appTheme.setPrimaryColor(color);
+        });
+      },
+      child: Container(
+        padding: const EdgeInsets.all(4),
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          border: Border.all(
+            color: isSelected ? Colors.white : Colors.transparent,
+            width: 3,
+          ),
+        ),
+        child: CircleAvatar(
+          backgroundColor: color,
+          radius: 22,
+          child: isSelected
+              ? const Icon(Icons.check, color: Colors.white)
+              : null,
+        ),
+      ),
+    );
+  }
+}
+
+// ==========================================
+// PREVIOUS COMPLAINTS SCREEN
+// ==========================================
+class PreviousComplaintsScreen extends StatelessWidget {
+  final String userEmail;
+  const PreviousComplaintsScreen({super.key, required this.userEmail});
+
+  @override
+  Widget build(BuildContext context) {
+    final pastComplaints = AppDatabase.complaints
+        .where(
+          (c) =>
+              c.citizenEmail.trim().toLowerCase() ==
+              userEmail.trim().toLowerCase(),
+        )
+        .toList();
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('Previous Records & Complaints')),
+      body: pastComplaints.isEmpty
+          ? const Center(child: Text('No previous complaints recorded.'))
+          : ListView.builder(
+              padding: const EdgeInsets.all(16),
+              itemCount: pastComplaints.length,
+              itemBuilder: (context, index) {
+                final c = pastComplaints[index];
+                return Card(
+                  margin: const EdgeInsets.only(bottom: 12),
+                  child: Padding(
+                    padding: const EdgeInsets.all(16.0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'ID: ${c.id}',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: appTheme.primaryColor,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Category: ${c.category}',
+                          style: const TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                        Text('Status: ${c.status}'),
+                        Text('Location: ${c.location}'),
+                        if (c.completionNote != null) ...[
+                          const SizedBox(height: 6),
+                          Text(
+                            'Resolution Note: ${c.completionNote}',
+                            style: const TextStyle(fontStyle: FontStyle.italic),
+                          ),
+                        ],
+                        if (c.citizenRating != null) ...[
+                          const SizedBox(height: 4),
+                          Row(
+                            children: [
+                              const Text(
+                                'Rating Given: ',
+                                style: TextStyle(fontWeight: FontWeight.bold),
+                              ),
+                              Text(
+                                '${c.citizenRating} / 5 ⭐',
+                                style: const TextStyle(color: Colors.amber),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+    );
+  }
+}
+
+// ==========================================
+// CITY HEATMAP SCREEN
+// ==========================================
+class HeatmapScreen extends StatelessWidget {
+  const HeatmapScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('City Infrastructure Heatmap')),
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Probable Civic Incident Clusters',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Spatial and temporal analysis showing high-density problem areas across the municipality.',
+              style: TextStyle(color: Colors.grey),
+            ),
+            const SizedBox(height: 20),
+            Expanded(
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Colors.blueGrey.shade50,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.blueGrey.shade200),
+                ),
+                child: const Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        Icons.map_rounded,
+                        size: 80,
+                        color: Colors.blueAccent,
+                      ),
+                      SizedBox(height: 12),
+                      Text(
+                        'Connaught Place Hotspot: 12 Pothole Reports Fused',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: Colors.black87,
+                        ),
+                      ),
+                      SizedBox(height: 4),
+                      Text(
+                        'Nehru Place Cluster: Streetlight Outage & Drainage Warning',
+                        style: TextStyle(color: Colors.grey),
+                      ),
+                    ],
+                  ),
+                ),
               ),
-            );
-          }
-          return ListView(
-            padding: const EdgeInsets.all(16),
-            children: mine
-                .map(
-                  (c) => ComplaintTile(
-                    complaint: c,
-                    onTap: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => CitizenComplaintDetails(complaint: c),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ==========================================
+// PROFILE SCREEN (CITIZEN USER CARD LAYOUT)
+// ==========================================
+class ProfileScreen extends StatefulWidget {
+  final UserProfile user;
+  const ProfileScreen({super.key, required this.user});
+
+  @override
+  State<ProfileScreen> createState() => _ProfileScreenState();
+}
+
+class _ProfileScreenState extends State<ProfileScreen> {
+  final ImagePicker _picker = ImagePicker();
+
+  Future<void> _pickProfilePhoto(ImageSource source) async {
+    try {
+      final XFile? pickedFile = await _picker.pickImage(
+        source: source,
+        imageQuality: 70,
+      );
+      if (pickedFile != null) {
+        setState(() {
+          widget.user.profileImagePath = pickedFile.path;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error updating photo: $e')));
+      }
+    }
+  }
+
+  void _showImagePickerModal() {
+    showModalBottomSheet(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Wrap(
+          children: [
+            ListTile(
+              leading: const Icon(Icons.camera_alt),
+              title: const Text('Capture with Camera'),
+              onTap: () {
+                Navigator.pop(context);
+                _pickProfilePhoto(ImageSource.camera);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_library),
+              title: const Text('Select from Gallery'),
+              onTap: () {
+                Navigator.pop(context);
+                _pickProfilePhoto(ImageSource.gallery);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('User Profile Details')),
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: ListView(
+          children: [
+            const SizedBox(height: 12),
+            Center(
+              child: Stack(
+                children: [
+                  CircleAvatar(
+                    radius: 50,
+                    backgroundColor: appTheme.primaryColor,
+                    backgroundImage: widget.user.profileImagePath != null
+                        ? FileImage(File(widget.user.profileImagePath!))
+                        : null,
+                    child: widget.user.profileImagePath == null
+                        ? const Icon(
+                            Icons.person,
+                            size: 60,
+                            color: Colors.white,
+                          )
+                        : null,
+                  ),
+                  Positioned(
+                    bottom: 0,
+                    right: 0,
+                    child: CircleAvatar(
+                      backgroundColor: Colors.white,
+                      radius: 18,
+                      child: IconButton(
+                        icon: const Icon(
+                          Icons.edit,
+                          size: 18,
+                          color: Colors.blue,
+                        ),
+                        onPressed: _showImagePickerModal,
                       ),
                     ),
                   ),
-                )
-                .toList(),
+                ],
+              ),
+            ),
+            const SizedBox(height: 24),
+            _buildProfileCard(Icons.person, 'Full Name', widget.user.fullName),
+            _buildProfileCard(Icons.email, 'Gmail ID', widget.user.email),
+            _buildProfileCard(Icons.phone, 'Mobile Number', widget.user.mobile),
+            _buildProfileCard(
+              Icons.verified_user,
+              'Account Type',
+              'Citizen Registered Account',
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildProfileCard(IconData icon, String label, String value) {
+    return Card(
+      elevation: 2,
+      margin: const EdgeInsets.only(bottom: 12),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      child: ListTile(
+        leading: CircleAvatar(
+          backgroundColor: appTheme.primaryColor.withValues(alpha: 0.1),
+          child: Icon(icon, color: appTheme.primaryColor),
+        ),
+        title: Text(
+          label,
+          style: const TextStyle(
+            fontSize: 12,
+            color: Colors.grey,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        subtitle: Text(
+          value,
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+        ),
+      ),
+    );
+  }
+}
+
+// ==========================================
+// CREATE COMPLAINT SCREEN
+// ==========================================
+class CreateComplaintScreen extends StatefulWidget {
+  final String userEmail;
+  const CreateComplaintScreen({super.key, required this.userEmail});
+
+  @override
+  State<CreateComplaintScreen> createState() => _CreateComplaintScreenState();
+}
+
+class _CreateComplaintScreenState extends State<CreateComplaintScreen> {
+  final _formKey = GlobalKey<FormState>();
+  String _category = 'Pothole & Road Damage';
+  String _severity = 'Medium';
+  final TextEditingController _descController = TextEditingController();
+  final TextEditingController _locationController = TextEditingController();
+  File? _imageFile;
+  final ImagePicker _picker = ImagePicker();
+
+  void _promptCameraPermissionAndCapture() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Allow Camera Access'),
+        content: const Text(
+          'SahaySetu requires access to your camera to capture live photographic evidence of infrastructure issues.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              _takeLivePhoto();
+            },
+            child: const Text('Allow Only While Using App'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _promptGpsPermission() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Allow Location Access'),
+        content: const Text(
+          'Allow SahaySetu to access this device\'s location to tag exact geo-coordinates?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              setState(() {
+                _locationController.text =
+                    "Sector 62, Main Road, Delhi (GPS Tagged)";
+              });
+            },
+            child: const Text('While Using App'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _takeLivePhoto() async {
+    try {
+      final XFile? pickedFile = await _picker.pickImage(
+        source: ImageSource.camera,
+        imageQuality: 70,
+      );
+      if (pickedFile != null) {
+        setState(() => _imageFile = File(pickedFile.path));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Camera error: $e')));
+      }
+    }
+  }
+
+  void _submit() {
+    if (_formKey.currentState!.validate()) {
+      if (_imageFile == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Live photo mandatory!'),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+        return;
+      }
+
+      final newComplaint = Complaint(
+        id: 'SS-${1026 + AppDatabase.complaints.length}',
+        category: _category,
+        description: _descController.text.trim(),
+        severity: _severity,
+        location: _locationController.text.trim(),
+        status: 'Pending',
+        citizenEmail: widget.userEmail,
+      );
+      AppDatabase.complaints.add(newComplaint);
+
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (context) =>
+              SubmissionFeedbackScreen(complaint: newComplaint),
+        ),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Report New Complaint')),
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Form(
+          key: _formKey,
+          child: ListView(
+            children: [
+              DropdownButtonFormField<String>(
+                initialValue: _category,
+                items:
+                    [
+                          'Pothole & Road Damage',
+                          'Broken Streetlight',
+                          'Garbage Accumulation',
+                          'Water Leakage',
+                          'Blocked Drainage',
+                        ]
+                        .map((c) => DropdownMenuItem(value: c, child: Text(c)))
+                        .toList(),
+                onChanged: (val) => setState(() => _category = val!),
+                decoration: const InputDecoration(
+                  labelText: 'Category *',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 16),
+              DropdownButtonFormField<String>(
+                initialValue: _severity,
+                items: ['Low', 'Medium', 'High', 'Critical']
+                    .map((s) => DropdownMenuItem(value: s, child: Text(s)))
+                    .toList(),
+                onChanged: (val) => setState(() => _severity = val!),
+                decoration: const InputDecoration(
+                  labelText: 'Severity Level *',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 16),
+              TextFormField(
+                controller: _descController,
+                maxLines: 3,
+                decoration: const InputDecoration(
+                  labelText: 'Description *',
+                  border: OutlineInputBorder(),
+                ),
+                validator: (val) => val == null || val.trim().length < 10
+                    ? 'Enter min 10 characters'
+                    : null,
+              ),
+              const SizedBox(height: 16),
+              TextFormField(
+                controller: _locationController,
+                decoration: InputDecoration(
+                  labelText: 'Location / Landmark Address *',
+                  border: const OutlineInputBorder(),
+                  suffixIcon: IconButton(
+                    icon: const Icon(Icons.my_location, color: Colors.blue),
+                    onPressed: _promptGpsPermission,
+                  ),
+                ),
+                validator: (val) => val == null || val.trim().isEmpty
+                    ? 'Address mandatory'
+                    : null,
+              ),
+              const SizedBox(height: 20),
+              OutlinedButton.icon(
+                onPressed: _promptCameraPermissionAndCapture,
+                icon: const Icon(Icons.camera_alt),
+                label: const Text('Capture Live Photo'),
+              ),
+              if (_imageFile != null) ...[
+                const SizedBox(height: 12),
+                Container(
+                  height: 140,
+                  decoration: BoxDecoration(
+                    image: DecorationImage(
+                      image: FileImage(_imageFile!),
+                      fit: BoxFit.cover,
+                    ),
+                  ),
+                ),
+              ],
+              const SizedBox(height: 24),
+              ElevatedButton(
+                onPressed: _submit,
+                child: const Text('Submit Complaint'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ==========================================
+// SUBMISSION CONFIRMATION
+// ==========================================
+class SubmissionFeedbackScreen extends StatelessWidget {
+  final Complaint complaint;
+  const SubmissionFeedbackScreen({super.key, required this.complaint});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Submission Confirmed')),
+      body: Padding(
+        padding: const EdgeInsets.all(24.0),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(
+              Icons.check_circle_rounded,
+              size: 80,
+              color: Colors.green,
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              'Complaint Filed Successfully!',
+              style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 24),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Return to Dashboard'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ==========================================
+// FIELD WORKER MODULE
+// ==========================================
+class WorkerLoginScreen extends StatefulWidget {
+  const WorkerLoginScreen({super.key});
+
+  @override
+  State<WorkerLoginScreen> createState() => _WorkerLoginScreenState();
+}
+
+class _WorkerLoginScreenState extends State<WorkerLoginScreen> {
+  final _formKey = GlobalKey<FormState>();
+  final bool _obscureWorkerPass = true;
+  final TextEditingController _usernameController = TextEditingController();
+  final TextEditingController _passwordController = TextEditingController();
+
+  void _loginWorker() {
+    if (_formKey.currentState!.validate()) {
+      String username = _usernameController.text.trim().toLowerCase();
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (context) => WorkerDashboardScreen(workerId: username),
+        ),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Field Worker Portal')),
+      body: Padding(
+        padding: const EdgeInsets.all(24.0),
+        child: Form(
+          key: _formKey,
+          child: ListView(
+            children: [
+              const SizedBox(height: 20),
+              const Icon(Icons.engineering, size: 70, color: Color(0xFF0F172A)),
+              const SizedBox(height: 16),
+              const Text(
+                'Worker Authentication',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 32),
+              TextFormField(
+                controller: _usernameController,
+                decoration: const InputDecoration(
+                  labelText: 'Worker Username (e.g. rajesh@sahaysetu)',
+                  border: OutlineInputBorder(),
+                ),
+                validator: (val) => val == null || !val.endsWith('@sahaysetu')
+                    ? 'Must end with @sahaysetu'
+                    : null,
+              ),
+              const SizedBox(height: 16),
+              TextFormField(
+                controller: _passwordController,
+                obscureText: _obscureWorkerPass,
+                decoration: const InputDecoration(
+                  labelText: 'Password',
+                  border: OutlineInputBorder(),
+                ),
+                validator: (val) =>
+                    val == null || val.isEmpty ? 'Enter password' : null,
+              ),
+              const SizedBox(height: 24),
+              ElevatedButton(
+                onPressed: _loginWorker,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF0F172A),
+                ),
+                child: const Text('Worker Sign In'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class WorkerDashboardScreen extends StatefulWidget {
+  final String workerId;
+  const WorkerDashboardScreen({super.key, required this.workerId});
+
+  @override
+  State<WorkerDashboardScreen> createState() => _WorkerDashboardScreenState();
+}
+
+class _WorkerDashboardScreenState extends State<WorkerDashboardScreen> {
+  @override
+  Widget build(BuildContext context) {
+    final workerInfo = AppDatabase.workerProfiles.firstWhere(
+      (w) => w.workerId.toLowerCase() == widget.workerId.toLowerCase(),
+      orElse: () => WorkerProfile(
+        workerId: widget.workerId,
+        fullName: 'Field Worker',
+        department: 'Pothole & Road Damage',
+        wardZone: 'Municipal Ward',
+        officialEmail: widget.workerId,
+        mobile: '1800-MUN-HELP',
+        designation: 'Municipal Field Staff',
+        bonusPoints: 100,
+      ),
+    );
+
+    final departmentComplaints = AppDatabase.complaints
+        .where(
+          (c) =>
+              c.category.toLowerCase() == workerInfo.department.toLowerCase(),
+        )
+        .toList();
+
+    return Scaffold(
+      appBar: AppBar(
+        backgroundColor: const Color(0xFF0F172A),
+        title: Text('Worker: ${widget.workerId}'),
+      ),
+      drawer: Drawer(
+        child: ListView(
+          padding: EdgeInsets.zero,
+          children: [
+            UserAccountsDrawerHeader(
+              accountName: Text(
+                '${workerInfo.fullName} (Bonus: ⭐ ${workerInfo.bonusPoints})',
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+              accountEmail: Text(
+                '${workerInfo.designation}\n${workerInfo.department}',
+              ),
+              currentAccountPicture: const CircleAvatar(
+                backgroundColor: Colors.white,
+                child: Icon(
+                  Icons.verified_user,
+                  size: 40,
+                  color: Color(0xFF0F172A),
+                ),
+              ),
+              decoration: const BoxDecoration(color: Color(0xFF0F172A)),
+            ),
+            ListTile(
+              leading: const Icon(Icons.assignment),
+              title: const Text('Department Tasks'),
+              onTap: () => Navigator.pop(context),
+            ),
+            ListTile(
+              leading: const Icon(Icons.badge),
+              title: const Text('Worker Profile Details'),
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) =>
+                        WorkerProfileDetailScreen(worker: workerInfo),
+                  ),
+                );
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.check_circle_outline),
+              title: const Text('Resolved Complaints History'),
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) =>
+                        WorkerResolvedHistoryScreen(workerId: widget.workerId),
+                  ),
+                );
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.settings),
+              title: const Text('Settings'),
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => const SettingsScreen(),
+                  ),
+                );
+              },
+            ),
+            const Divider(),
+            ListTile(
+              leading: const Icon(Icons.logout, color: Colors.red),
+              title: const Text('Logout', style: TextStyle(color: Colors.red)),
+              onTap: () {
+                Navigator.pushAndRemoveUntil(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => const RoleSelectionScreen(),
+                  ),
+                  (route) => false,
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+      body: ListView.builder(
+        padding: const EdgeInsets.all(16),
+        itemCount: departmentComplaints.length,
+        itemBuilder: (context, index) {
+          final complaint = departmentComplaints[index];
+          return Card(
+            margin: const EdgeInsets.only(bottom: 12),
+            child: ListTile(
+              title: Text(
+                complaint.id,
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF0F172A),
+                ),
+              ),
+              subtitle: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const SizedBox(height: 4),
+                  Text(
+                    complaint.category,
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  Text(complaint.location),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Status: ${complaint.status}',
+                    style: TextStyle(
+                      color: _getStatusColor(complaint.status),
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
+              trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+              onTap: () async {
+                await Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => WorkerTaskDetailScreen(
+                      complaint: complaint,
+                      workerId: widget.workerId,
+                    ),
+                  ),
+                );
+                setState(() {});
+              },
+            ),
           );
         },
       ),
     );
   }
-}
 
-class CityHealthScoreScreen extends StatelessWidget {
-  const CityHealthScoreScreen({super.key});
-  @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('City Health Score')),
-    body: AnimatedBuilder(
-      animation: appState,
-      builder: (context, _) => Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              SizedBox(
-                width: 150,
-                height: 150,
-                child: Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    CircularProgressIndicator(
-                      value: appState.healthScore / 100,
-                      strokeWidth: 12,
-                    ),
-                    Text(
-                      '${appState.healthScore}/100',
-                      style: const TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 20),
-              const SizedBox(height: 10),
-              Text(
-                '${appState.resolvedCount} resolved/closed out of ${appState.complaints.length} total complaints',
-              ),
-            ],
-          ),
-        ),
-      ),
-    ),
-  );
-}
-
-Widget statCard(String title, String value, IconData icon) => Card(
-  child: Padding(
-    padding: const EdgeInsets.all(14),
-    child: Column(
-      children: [
-        Icon(icon, size: 26),
-        const SizedBox(height: 7),
-        Text(
-          value,
-          style: const TextStyle(fontSize: 23, fontWeight: FontWeight.bold),
-        ),
-        Text(title, textAlign: TextAlign.center),
-      ],
-    ),
-  ),
-);
-Widget statusChip(String status) {
-  final color = status == 'Closed'
-      ? Colors.green
-      : status == 'Resolved'
-      ? Colors.teal
-      : status == 'In Progress'
-      ? Colors.blue
-      : Colors.orange;
-  return Chip(
-    label: Text(status),
-    visualDensity: VisualDensity.compact,
-    side: BorderSide.none,
-    backgroundColor: color.withValues(alpha: .12),
-    labelStyle: TextStyle(color: color, fontWeight: FontWeight.w600),
-  );
-}
-
-class CitizenHome extends StatelessWidget {
-  const CitizenHome({
-    super.key,
-    required this.name,
-    this.email = '',
-    this.phone = '',
-  });
-  final String name, email, phone;
-  @override
-  Widget build(BuildContext context) => BaseHome(
-    title: 'Citizen Dashboard',
-    name: name,
-    email: email,
-    phone: phone,
-    isCitizen: true,
-    buildChildren: () => [
-      Card(
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Row(
-            children: [
-              SizedBox(
-                width: 70,
-                height: 70,
-                child: Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    CircularProgressIndicator(
-                      value: appState.healthScore / 100,
-                      strokeWidth: 7,
-                    ),
-                    Text(
-                      '${appState.healthScore}',
-                      style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 20,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 16),
-              const Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'City Health Score',
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 17,
-                      ),
-                    ),
-                    SizedBox(height: 5),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-      Row(
-        children: [
-          Expanded(
-            child: statCard(
-              'Active',
-              '${appState.activeCount}',
-              Icons.pending_actions,
-            ),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: statCard(
-              'Resolved / Closed',
-              '${appState.resolvedCount}',
-              Icons.task_alt,
-            ),
-          ),
-        ],
-      ),
-      const SizedBox(height: 8),
-      FilledButton.icon(
-        onPressed: () => Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => const ReportIssueScreen()),
-        ),
-        icon: const Icon(Icons.add_a_photo),
-        label: const Padding(
-          padding: EdgeInsets.all(14),
-          child: Text('Report Civic Issue'),
-        ),
-      ),
-      const SizedBox(height: 8),
-      const Text(
-        'My complaints',
-        style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-      ),
-      ...appState.complaints
-          .where((c) => c.ownerEmail == email)
-          .map(
-            (c) => ComplaintTile(
-              complaint: c,
-              onTap: () => Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => CitizenComplaintDetails(complaint: c),
-                ),
-              ),
-            ),
-          ),
-      if (appState.complaints.where((c) => c.ownerEmail == email).isEmpty)
-        const Padding(
-          padding: EdgeInsets.symmetric(vertical: 24),
-          child: Center(
-            child: Text(
-              'No complaints yet. Tap “Report Civic Issue” to get started.',
-            ),
-          ),
-        ),
-    ],
-  );
-}
-
-class ReportIssueScreen extends StatefulWidget {
-  const ReportIssueScreen({super.key});
-  @override
-  State<ReportIssueScreen> createState() => _ReportIssueScreenState();
-}
-
-class _ReportIssueScreenState extends State<ReportIssueScreen> {
-  final formKey = GlobalKey<FormState>();
-  final description = TextEditingController();
-  final picker = ImagePicker();
-  String category = 'Road Damage', priority = 'Medium';
-  XFile? photo;
-  Position? position;
-  bool gettingLocation = false, saving = false, capturingPhoto = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _retrieveLostData();
-  }
-
-  Future<void> _retrieveLostData() async {
-    try {
-      final response = await picker.retrieveLostData();
-      if (response.isEmpty) return;
-      if (response.file != null && mounted) {
-        setState(() => photo = response.file);
-        message(context, 'Recovered captured photo.');
-      } else if (response.exception != null && mounted) {
-        message(
-          context,
-          'Camera recovery: ${response.exception?.message ?? response.exception.toString()}',
-        );
-      }
-    } catch (_) {
-      // Platform doesn't support or no lost data
+  Color _getStatusColor(String status) {
+    switch (status) {
+      case 'Pending':
+        return Colors.orange;
+      case 'In Progress':
+        return Colors.blue;
+      case 'Resolved / Awaiting Verification':
+        return Colors.purple;
+      case 'Closed':
+        return Colors.green;
+      default:
+        return Colors.grey;
     }
   }
-
-  Future<void> capturePhoto() async {
-    if (capturingPhoto) return;
-    setState(() => capturingPhoto = true);
-    try {
-      final x = await picker.pickImage(
-        source: ImageSource.camera,
-        preferredCameraDevice: CameraDevice.rear,
-        imageQuality: 80,
-        maxWidth: 1600,
-        maxHeight: 1600,
-      );
-      if (!mounted) return;
-      if (x != null) {
-        setState(() => photo = x);
-        message(context, 'Live photo captured successfully.');
-      } else {
-        message(context, 'Camera was closed without taking a photo.');
-      }
-    } on PlatformException catch (e) {
-      if (!mounted) return;
-      if (e.code == 'camera_access_denied') {
-        message(
-          context,
-          'Camera permission denied. Please allow camera in Settings.',
-        );
-      } else {
-        message(context, 'Camera error: ${e.message ?? e.code}');
-      }
-    } catch (e) {
-      if (mounted) message(context, 'Camera error: $e');
-    } finally {
-      if (mounted) setState(() => capturingPhoto = false);
-    }
-  }
-
-  Future<void> captureGps() async {
-    setState(() => gettingLocation = true);
-    try {
-      final enabled = await Geolocator.isLocationServiceEnabled();
-      if (!mounted) return;
-      if (!enabled) {
-        message(context, 'Please turn on device location.');
-        return;
-      }
-      var permission = await Geolocator.checkPermission();
-      if (!mounted) return;
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-        if (!mounted) return;
-      }
-      if (permission == LocationPermission.denied ||
-          permission == LocationPermission.deniedForever) {
-        message(context, 'Location permission not granted.');
-        return;
-      }
-      final value = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.high,
-          timeLimit: Duration(seconds: 20),
-        ),
-      );
-      if (!mounted) return;
-      setState(() => position = value);
-    } catch (e) {
-      if (mounted) message(context, 'GPS error: $e');
-    } finally {
-      if (mounted) setState(() => gettingLocation = false);
-    }
-  }
-
-  @override
-  void dispose() {
-    description.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Report Civic Issue')),
-    body: Form(
-      key: formKey,
-      child: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          Card(
-            child: ListTile(
-              leading: Icon(
-                photo == null ? Icons.camera_alt : Icons.check_circle,
-                color: photo == null ? null : Colors.green,
-              ),
-              title: const Text('Live issue photo'),
-              subtitle: Text(
-                photo == null
-                    ? 'Take live photo at the complaint site'
-                    : 'Live photo captured',
-              ),
-              trailing: FilledButton.tonal(
-                onPressed: capturingPhoto ? null : capturePhoto,
-                child: capturingPhoto
-                    ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : Text(photo == null ? 'Capture' : 'Retake'),
-              ),
-            ),
-          ),
-          if (photo != null)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 12),
-              child: Stack(
-                alignment: Alignment.topRight,
-                children: [
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(12),
-                    child: Image.file(
-                      File(photo!.path),
-                      height: 190,
-                      width: double.infinity,
-                      fit: BoxFit.cover,
-                      errorBuilder: (context, error, stackTrace) => Container(
-                        height: 140,
-                        width: double.infinity,
-                        color: Colors.grey.shade200,
-                        alignment: Alignment.center,
-                        child: const Text('Unable to load photo preview'),
-                      ),
-                    ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.all(6),
-                    child: CircleAvatar(
-                      backgroundColor: Colors.black54,
-                      radius: 16,
-                      child: IconButton(
-                        icon: const Icon(
-                          Icons.close,
-                          size: 16,
-                          color: Colors.white,
-                        ),
-                        tooltip: 'Remove photo',
-                        onPressed: () => setState(() => photo = null),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          Card(
-            child: ListTile(
-              leading: Icon(
-                position == null ? Icons.location_on : Icons.check_circle,
-                color: position == null ? null : Colors.green,
-              ),
-              title: const Text('GPS location'),
-              subtitle: Text(
-                position == null
-                    ? 'Capture the issue location'
-                    : '${position!.latitude.toStringAsFixed(5)}, ${position!.longitude.toStringAsFixed(5)}',
-              ),
-              trailing: FilledButton.tonal(
-                onPressed: gettingLocation ? null : captureGps,
-                child: Text(
-                  gettingLocation
-                      ? 'Wait…'
-                      : position == null
-                      ? 'Capture'
-                      : 'Refresh',
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(height: 8),
-          DropdownButtonFormField<String>(
-            initialValue: category,
-            decoration: const InputDecoration(labelText: 'Issue category'),
-            items: const [
-              'Road Damage',
-              'Street Light',
-              'Garbage',
-              'Water Problem',
-              'Drainage',
-            ].map((x) => DropdownMenuItem(value: x, child: Text(x))).toList(),
-            onChanged: (x) => setState(() => category = x ?? category),
-          ),
-          const SizedBox(height: 12),
-          DropdownButtonFormField<String>(
-            initialValue: priority,
-            decoration: const InputDecoration(labelText: 'Severity'),
-            items: const [
-              'Low',
-              'Medium',
-              'High',
-            ].map((x) => DropdownMenuItem(value: x, child: Text(x))).toList(),
-            onChanged: (x) => setState(() => priority = x ?? priority),
-          ),
-          const SizedBox(height: 12),
-          TextFormField(
-            controller: description,
-            maxLines: 4,
-            decoration: const InputDecoration(
-              labelText: 'Describe the issue',
-              hintText: 'What happened and where?',
-            ),
-            validator: (x) => x == null || x.trim().isEmpty
-                ? 'Please describe the issue'
-                : null,
-          ),
-          const SizedBox(height: 14),
-          FilledButton(
-            onPressed: saving
-                ? null
-                : () {
-                    if (!(formKey.currentState?.validate() ?? false)) return;
-                    if (photo == null) {
-                      message(context, 'Please capture an issue photo.');
-                      return;
-                    }
-                    if (position == null) {
-                      message(context, 'Please capture GPS location.');
-                      return;
-                    }
-                    setState(() => saving = true);
-                    final submittedComplaint = appState.addComplaint(
-                      category: category,
-                      description: description.text.trim(),
-                      priority: priority,
-                      photoPath: photo!.path,
-                      ownerEmail: appState.currentCitizenEmail,
-                      latitude: position!.latitude,
-                      longitude: position!.longitude,
-                    );
-                    setState(() => saving = false);
-                    Navigator.pushReplacement(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => ComplaintSubmittedScreen(
-                          complaint: submittedComplaint,
-                        ),
-                      ),
-                    );
-                  },
-            child: Padding(
-              padding: const EdgeInsets.all(14),
-              child: Text(saving ? 'Submitting…' : 'Submit Complaint'),
-            ),
-          ),
-        ],
-      ),
-    ),
-  );
 }
 
-class ComplaintSubmittedScreen extends StatelessWidget {
-  const ComplaintSubmittedScreen({super.key, required this.complaint});
-  final CivicComplaint complaint;
-
-  @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(
-      title: const Text('Complaint Submitted'),
-      automaticallyImplyLeading: false,
-    ),
-    body: Center(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const Icon(Icons.check_circle, color: Colors.green, size: 88),
-            const SizedBox(height: 20),
-            const Text(
-              'Your complaint is submitted successfully!',
-              textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 23, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 12),
-            const Text(
-              'You can track your complaint from here.',
-              textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 16, color: Colors.black54),
-            ),
-            const SizedBox(height: 22),
-            Card(
-              child: ListTile(
-                leading: const Icon(Icons.confirmation_number_outlined),
-                title: const Text('Complaint ID'),
-                subtitle: Text(
-                  complaint.id,
-                  style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(height: 14),
-            FilledButton.icon(
-              onPressed: () => Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => CitizenComplaintDetails(complaint: complaint),
-                ),
-              ),
-              icon: const Icon(Icons.track_changes),
-              label: const Padding(
-                padding: EdgeInsets.all(14),
-                child: Text('Track Complaint'),
-              ),
-            ),
-            const SizedBox(height: 8),
-            OutlinedButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Back to Dashboard'),
-            ),
-          ],
-        ),
-      ),
-    ),
-  );
-}
-
-class WorkerHome extends StatelessWidget {
-  const WorkerHome({super.key, required this.name});
-  final String name;
-  @override
-  Widget build(BuildContext context) => BaseHome(
-    title: 'Field Worker',
-    name: name,
-    buildChildren: () => [
-      const Text(
-        'Assigned tasks',
-        style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-      ),
-      const SizedBox(height: 8),
-      ...appState.complaints.map(
-        (c) => ComplaintTile(
-          complaint: c,
-          onTap: () => Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => WorkerTaskScreen(complaint: c)),
-          ),
-        ),
-      ),
-    ],
-  );
-}
-
-class WorkerTaskScreen extends StatefulWidget {
-  const WorkerTaskScreen({super.key, required this.complaint});
-  final CivicComplaint complaint;
-  @override
-  State<WorkerTaskScreen> createState() => _WorkerTaskScreenState();
-}
-
-class _WorkerTaskScreenState extends State<WorkerTaskScreen> {
-  late String status;
-  XFile? proof;
-  final picker = ImagePicker();
-  late final TextEditingController noteController;
-  bool capturingProof = false;
-
-  @override
-  void initState() {
-    super.initState();
-    status = widget.complaint.status == 'Assigned'
-        ? 'Pending'
-        : widget.complaint.status;
-    noteController = TextEditingController(
-      text: widget.complaint.resolutionNote ?? '',
-    );
-    if (widget.complaint.completionPhotoPath != null) {
-      proof = XFile(widget.complaint.completionPhotoPath!);
-    }
-    _checkLostData();
-  }
-
-  @override
-  void dispose() {
-    noteController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _checkLostData() async {
-    try {
-      final response = await picker.retrieveLostData();
-      if (response.isEmpty) return;
-      if (response.file != null && mounted) {
-        setState(() => proof = response.file);
-        message(context, 'Recovered completion photo.');
-      } else if (response.exception != null && mounted) {
-        message(
-          context,
-          'Camera recovery: ${response.exception?.message ?? response.exception.toString()}',
-        );
-      }
-    } catch (_) {}
-  }
-
-  Future<void> takeProof() async {
-    if (capturingProof) return;
-    setState(() => capturingProof = true);
-    try {
-      final x = await picker.pickImage(
-        source: ImageSource.camera,
-        preferredCameraDevice: CameraDevice.rear,
-        imageQuality: 80,
-        maxWidth: 1600,
-        maxHeight: 1600,
-      );
-      if (!mounted) return;
-      if (x != null) {
-        setState(() => proof = x);
-        message(context, 'Completion photo captured successfully.');
-      } else {
-        message(context, 'Camera was closed without taking a photo.');
-      }
-    } on PlatformException catch (e) {
-      if (!mounted) return;
-      if (e.code == 'camera_access_denied') {
-        message(
-          context,
-          'Camera permission denied. Please allow camera in Settings.',
-        );
-      } else {
-        message(context, 'Camera error: ${e.message ?? e.code}');
-      }
-    } catch (e) {
-      if (mounted) message(context, 'Camera error: $e');
-    } finally {
-      if (mounted) setState(() => capturingProof = false);
-    }
-  }
+// ==========================================
+// WORKER PROFILE DETAILS (CARD LAYOUT)
+// ==========================================
+class WorkerProfileDetailScreen extends StatelessWidget {
+  final WorkerProfile worker;
+  const WorkerProfileDetailScreen({super.key, required this.worker});
 
   @override
   Widget build(BuildContext context) {
-    final c = widget.complaint;
     return Scaffold(
-      appBar: AppBar(title: Text(c.id)),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          Text(
-            c.title,
-            style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-          ),
-          const SizedBox(height: 8),
-          Text(c.description),
-          const SizedBox(height: 12),
-          infoTile(Icons.location_on, 'GPS', c.location),
-          infoTile(Icons.apartment, 'Department', c.department),
-          infoTile(Icons.person, 'Assigned worker', c.worker),
-          infoTile(Icons.priority_high, 'Priority', c.priority),
-          if (c.photoPath != null) ...[
-            const SizedBox(height: 8),
-            const Text(
-              'Citizen Issue Photo:',
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 6),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(12),
-              child: Image.file(
-                File(c.photoPath!),
-                height: 170,
-                width: double.infinity,
-                fit: BoxFit.cover,
-                errorBuilder: (_, _, _) => Container(
-                  height: 110,
-                  width: double.infinity,
-                  color: Colors.grey.shade200,
-                  alignment: Alignment.center,
-                  child: const Text(
-                    'Original photo unavailable on this device',
-                  ),
-                ),
-              ),
-            ),
-          ],
-          const SizedBox(height: 12),
-          DropdownButtonFormField<String>(
-            initialValue:
-                ['Pending', 'In Progress', 'Resolved'].contains(status)
-                ? status
-                : 'Pending',
-            decoration: const InputDecoration(labelText: 'Update work status'),
-            items: const [
-              'Pending',
-              'In Progress',
-              'Resolved',
-            ].map((x) => DropdownMenuItem(value: x, child: Text(x))).toList(),
-            onChanged: (x) => setState(() => status = x ?? status),
-          ),
-          const SizedBox(height: 12),
-          TextFormField(
-            controller: noteController,
-            maxLines: 2,
-            decoration: const InputDecoration(
-              labelText: 'Resolution note (optional)',
-              hintText: 'Describe actions taken to fix the issue',
-            ),
-          ),
-          const SizedBox(height: 12),
-          OutlinedButton.icon(
-            onPressed: capturingProof ? null : takeProof,
-            icon: capturingProof
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : Icon(proof == null ? Icons.camera_alt : Icons.check_circle),
-            label: Text(
-              capturingProof
-                  ? 'Opening camera…'
-                  : proof == null
-                  ? 'Capture completion photo'
-                  : 'Retake completion photo',
-            ),
-          ),
-          if (proof != null)
-            Padding(
-              padding: const EdgeInsets.only(top: 8),
+      appBar: AppBar(
+        backgroundColor: const Color(0xFF0F172A),
+        title: const Text('Worker Profile Details'),
+      ),
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: ListView(
+          children: [
+            const SizedBox(height: 12),
+            const Center(
               child: Stack(
-                alignment: Alignment.topRight,
                 children: [
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(12),
-                    child: Image.file(
-                      File(proof!.path),
-                      height: 180,
-                      width: double.infinity,
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, _, _) => Container(
-                        height: 130,
-                        width: double.infinity,
-                        color: Colors.grey.shade200,
-                        alignment: Alignment.center,
-                        child: const Text('Unable to display completion photo'),
-                      ),
-                    ),
+                  CircleAvatar(
+                    radius: 50,
+                    backgroundColor: Color(0xFF0F172A),
+                    child: Icon(Icons.badge, size: 55, color: Colors.white),
                   ),
-                  Padding(
-                    padding: const EdgeInsets.all(6),
+                  Positioned(
+                    bottom: 0,
+                    right: 0,
                     child: CircleAvatar(
-                      backgroundColor: Colors.black54,
-                      radius: 16,
-                      child: IconButton(
-                        icon: const Icon(
-                          Icons.close,
-                          size: 16,
-                          color: Colors.white,
-                        ),
-                        tooltip: 'Remove photo',
-                        onPressed: () => setState(() => proof = null),
-                      ),
+                      backgroundColor: Colors.green,
+                      radius: 14,
+                      child: Icon(Icons.check, size: 16, color: Colors.white),
                     ),
                   ),
                 ],
               ),
             ),
-          const SizedBox(height: 12),
-          FilledButton(
-            onPressed: () {
-              if (status == 'Resolved' && proof == null) {
-                message(
-                  context,
-                  'Capture completion photo before marking Resolved.',
-                );
-                return;
-              }
-              appState.updateStatus(
-                c,
-                status,
-                completionPhotoPath: proof?.path,
-                resolutionNote: noteController.text.trim(),
-              );
-              message(context, 'Work status updated to $status in demo.');
-              Navigator.pop(context);
-            },
-            child: const Padding(
-              padding: EdgeInsets.all(14),
-              child: Text('Save Work Update'),
+            const SizedBox(height: 12),
+            const Text(
+              'Government Verified Worker Profile',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 13,
+                color: Colors.grey,
+                fontWeight: FontWeight.bold,
+              ),
             ),
+            const SizedBox(height: 20),
+            _buildWorkerCard(Icons.person, 'Full Name', worker.fullName),
+            _buildWorkerCard(Icons.work, 'Designation', worker.designation),
+            _buildWorkerCard(Icons.category, 'Department', worker.department),
+            _buildWorkerCard(Icons.map, 'Assigned Zone', worker.wardZone),
+            _buildWorkerCard(
+              Icons.star,
+              'Bonus Points Earned',
+              '${worker.bonusPoints} pts',
+            ),
+            _buildWorkerCard(
+              Icons.badge_outlined,
+              'Official ID',
+              worker.workerId,
+            ),
+            _buildWorkerCard(Icons.email, 'Govt Email', worker.officialEmail),
+            _buildWorkerCard(Icons.phone, 'Contact Number', worker.mobile),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildWorkerCard(IconData icon, String label, String value) {
+    return Card(
+      elevation: 2,
+      margin: const EdgeInsets.only(bottom: 12),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      child: ListTile(
+        leading: CircleAvatar(
+          backgroundColor: const Color(0xFF0F172A).withValues(alpha: 0.1),
+          child: Icon(icon, color: const Color(0xFF0F172A)),
+        ),
+        title: Text(
+          label,
+          style: const TextStyle(
+            fontSize: 12,
+            color: Colors.grey,
+            fontWeight: FontWeight.bold,
           ),
-        ],
+        ),
+        subtitle: Text(
+          value,
+          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+        ),
       ),
     );
   }
 }
 
-String departmentFor(String category) {
-  if (category == 'Road Damage') return 'Roads';
-  if (category == 'Street Light') return 'Electrical';
-  if (category == 'Garbage') return 'Sanitation';
-  if (category == 'Water Problem') return 'Water Supply';
-  return 'Drainage';
-}
-
-class ComplaintTile extends StatelessWidget {
-  const ComplaintTile({
+// ==========================================
+// PROFESSIONAL WORKER TASK DETAIL PAGE
+// ==========================================
+class WorkerTaskDetailScreen extends StatefulWidget {
+  final Complaint complaint;
+  final String workerId;
+  const WorkerTaskDetailScreen({
     super.key,
     required this.complaint,
-    required this.onTap,
+    required this.workerId,
   });
-  final CivicComplaint complaint;
-  final VoidCallback onTap;
+
   @override
-  Widget build(BuildContext context) => Card(
-    child: ListTile(
-      onTap: onTap,
-      leading: CircleAvatar(child: Icon(iconFor(complaint.category))),
-      title: Text(
-        complaint.title,
-        style: const TextStyle(fontWeight: FontWeight.bold),
-      ),
-      subtitle: Text(
-        '${complaint.id} • ${complaint.location}\n${complaint.department} • ${complaint.priority} priority',
-      ),
-      isThreeLine: true,
-      trailing: statusChip(complaint.status),
-    ),
-  );
+  State<WorkerTaskDetailScreen> createState() => _WorkerTaskDetailScreenState();
 }
 
-IconData iconFor(String category) {
-  switch (category) {
-    case 'Street Light':
-      return Icons.lightbulb_outline;
-    case 'Garbage':
-      return Icons.delete_outline;
-    case 'Water Problem':
-      return Icons.water_drop_outlined;
-    case 'Drainage':
-      return Icons.water;
-    default:
-      return Icons.construction_outlined;
+class _WorkerTaskDetailScreenState extends State<WorkerTaskDetailScreen> {
+  File? _completionPhoto;
+  final ImagePicker _picker = ImagePicker();
+  final TextEditingController _noteController = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.complaint.completionNote != null) {
+      _noteController.text = widget.complaint.completionNote!;
+    }
   }
-}
 
-Widget infoTile(IconData icon, String title, String value) => Card(
-  child: ListTile(
-    leading: Icon(icon),
-    title: Text(
-      title,
-      style: const TextStyle(fontSize: 12, color: Colors.black54),
-    ),
-    subtitle: Text(value, style: const TextStyle(fontWeight: FontWeight.w600)),
-  ),
-);
-void message(BuildContext context, String text) {
-  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
-}
+  Future<void> _captureCompletionPhoto() async {
+    try {
+      final XFile? pickedFile = await _picker.pickImage(
+        source: ImageSource.camera,
+        imageQuality: 70,
+      );
+      if (pickedFile != null) {
+        setState(() => _completionPhoto = File(pickedFile.path));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Camera error: $e')));
+      }
+    }
+  }
 
-class CitizenComplaintDetails extends StatefulWidget {
-  const CitizenComplaintDetails({super.key, required this.complaint});
-  final CivicComplaint complaint;
-  @override
-  State<CitizenComplaintDetails> createState() =>
-      _CitizenComplaintDetailsState();
-}
+  void _submitWorkCompletion() {
+    if (_completionPhoto == null &&
+        widget.complaint.completionPhotoPath == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Completion photo proof is required!'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+      return;
+    }
 
-class _CitizenComplaintDetailsState extends State<CitizenComplaintDetails> {
-  int rating = 0;
+    setState(() {
+      widget.complaint.status = 'Resolved / Awaiting Verification';
+      widget.complaint.assignedWorker = widget.workerId;
+      widget.complaint.completionNote = _noteController.text.trim();
+      if (_completionPhoto != null) {
+        widget.complaint.completionPhotoPath = _completionPhoto!.path;
+      }
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Work submitted! Sent to citizen for review and verification.',
+        ),
+      ),
+    );
+    Navigator.pop(context);
+  }
+
   @override
   Widget build(BuildContext context) {
-    final c = widget.complaint;
     return Scaffold(
-      appBar: AppBar(title: Text(c.id)),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          Text(
-            c.title,
-            style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-          ),
-          const SizedBox(height: 8),
-          Text(c.description),
-          const SizedBox(height: 12),
-          infoTile(Icons.category, 'Category', c.category),
-          infoTile(Icons.location_on, 'GPS location', c.location),
-          infoTile(Icons.apartment, 'Department', c.department),
-          infoTile(Icons.person, 'Assigned worker', c.worker),
-          infoTile(Icons.priority_high, 'Priority', c.priority),
-          if (c.photoPath != null) ...[
-            const SizedBox(height: 8),
+      appBar: AppBar(
+        backgroundColor: const Color(0xFF0F172A),
+        title: Text(widget.complaint.id),
+      ),
+      body: Padding(
+        padding: const EdgeInsets.all(20.0),
+        child: ListView(
+          children: [
+            Text(
+              widget.complaint.category,
+              style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 4),
+            Row(
+              children: [
+                const Icon(Icons.location_on, size: 16, color: Colors.grey),
+                const SizedBox(width: 4),
+                Text(
+                  widget.complaint.location,
+                  style: const TextStyle(fontSize: 15, color: Colors.grey),
+                ),
+              ],
+            ),
+            const Divider(height: 32),
+            TextField(
+              controller: _noteController,
+              maxLines: 3,
+              decoration: const InputDecoration(
+                labelText: 'Resolution / Work Note *',
+                hintText: 'Describe work completed...',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 20),
             const Text(
-              'Reported Issue Photo:',
+              'Completion Photo Proof *',
               style: TextStyle(fontWeight: FontWeight.bold),
             ),
-            const SizedBox(height: 6),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(12),
-              child: Image.file(
-                File(c.photoPath!),
-                height: 170,
-                width: double.infinity,
-                fit: BoxFit.cover,
-                errorBuilder: (_, _, _) => const SizedBox.shrink(),
-              ),
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              onPressed: _captureCompletionPhoto,
+              icon: const Icon(Icons.camera_alt),
+              label: const Text('Capture Completion Photo'),
             ),
-          ],
-          if (c.completionPhotoPath != null) ...[
-            const SizedBox(height: 12),
-            const Text(
-              'Worker Completion Evidence:',
-              style: TextStyle(fontWeight: FontWeight.bold, color: Colors.teal),
-            ),
-            const SizedBox(height: 6),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(12),
-              child: Image.file(
-                File(c.completionPhotoPath!),
-                height: 170,
-                width: double.infinity,
-                fit: BoxFit.cover,
-                errorBuilder: (_, _, _) => const SizedBox.shrink(),
-              ),
-            ),
-            if (c.resolutionNote != null && c.resolutionNote!.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: 6),
-                child: Text(
-                  'Worker note: ${c.resolutionNote}',
-                  style: const TextStyle(fontStyle: FontStyle.italic),
-                ),
-              ),
-          ],
-          const SizedBox(height: 8),
-          const Text(
-            'Complaint progress',
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-          ),
-          for (final s in [
-            'Pending',
-            'Assigned',
-            'In Progress',
-            'Resolved',
-            'Closed',
-          ])
-            ListTile(
-              leading: Icon(
-                (s == c.status || (s == 'Closed' && c.verified))
-                    ? Icons.check_circle
-                    : Icons.circle_outlined,
-              ),
-              title: Text(s),
-              subtitle: s == c.status ? const Text('Current status') : null,
-            ),
-          if (c.status == 'Resolved' && !c.verified) ...[
-            const Divider(),
-            const Text(
-              'Verify the repair',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-            ),
-            const Text('Please rate the work before closing this complaint.'),
-            Row(
-              children: List.generate(
-                5,
-                (i) => IconButton(
-                  onPressed: () => setState(() => rating = i + 1),
-                  icon: Icon(
-                    i < rating ? Icons.star : Icons.star_border,
-                    color: Colors.amber,
+            if (_completionPhoto != null ||
+                widget.complaint.completionPhotoPath != null) ...[
+              const SizedBox(height: 12),
+              Container(
+                height: 140,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(8),
+                  image: DecorationImage(
+                    image: FileImage(
+                      File(
+                        _completionPhoto?.path ??
+                            widget.complaint.completionPhotoPath!,
+                      ),
+                    ),
+                    fit: BoxFit.cover,
                   ),
                 ),
               ),
-            ),
-            FilledButton.icon(
-              onPressed: rating == 0
-                  ? null
-                  : () {
-                      appState.verify(c, rating);
-                      setState(() {});
-                      message(
-                        context,
-                        'Thank you. Complaint verified and closed in demo.',
-                      );
-                    },
-              icon: const Icon(Icons.verified),
-              label: const Text('Verify & Close Complaint'),
-            ),
-          ],
-          if (c.verified)
-            Card(
-              child: ListTile(
-                leading: const Icon(Icons.verified, color: Colors.green),
-                title: const Text('Citizen verified'),
-                subtitle: Text('Rating: ${c.rating}/5 • Complaint closed'),
+            ],
+            const SizedBox(height: 28),
+            ElevatedButton(
+              onPressed: _submitWorkCompletion,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF0F172A),
+              ),
+              child: const Text(
+                'Submit for Citizen Verification',
+                style: TextStyle(fontSize: 16),
               ),
             ),
-          const SizedBox(height: 12),
-        ],
+          ],
+        ),
       ),
+    );
+  }
+}
+
+// ==========================================
+// WORKER RESOLVED HISTORY SCREEN
+// ==========================================
+class WorkerResolvedHistoryScreen extends StatelessWidget {
+  final String workerId;
+  const WorkerResolvedHistoryScreen({super.key, required this.workerId});
+
+  @override
+  Widget build(BuildContext context) {
+    final resolvedTasks = AppDatabase.complaints
+        .where(
+          (c) =>
+              c.assignedWorker == workerId &&
+              (c.status.contains('Awaiting') || c.status == 'Closed'),
+        )
+        .toList();
+
+    return Scaffold(
+      appBar: AppBar(
+        backgroundColor: const Color(0xFF0F172A),
+        title: const Text('Resolved Complaints History'),
+      ),
+      body: resolvedTasks.isEmpty
+          ? const Center(child: Text('No resolved tasks in your history yet.'))
+          : ListView.builder(
+              padding: const EdgeInsets.all(16),
+              itemCount: resolvedTasks.length,
+              itemBuilder: (context, index) {
+                final task = resolvedTasks[index];
+                return Card(
+                  margin: const EdgeInsets.only(bottom: 12),
+                  child: Padding(
+                    padding: const EdgeInsets.all(16.0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          task.id,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: Color(0xFF0F172A),
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Category: ${task.category}',
+                          style: const TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                        Text('Location: ${task.location}'),
+                        Text('Note: ${task.completionNote ?? "N/A"}'),
+                        Text(
+                          'Status: ${task.status}',
+                          style: const TextStyle(
+                            color: Colors.green,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        if (task.citizenRating != null) ...[
+                          const SizedBox(height: 6),
+                          Text(
+                            'Citizen Rating: ${task.citizenRating} / 5 ⭐',
+                            style: const TextStyle(
+                              color: Colors.amber,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
     );
   }
 }
